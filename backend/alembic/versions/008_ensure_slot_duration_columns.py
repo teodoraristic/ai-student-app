@@ -46,7 +46,7 @@ def upgrade() -> None:
     op.execute("""
         UPDATE consultation_windows
         SET slot_duration_minutes = CASE
-            WHEN type = 'THESIS' THEN 60
+            WHEN type = 'thesis' THEN 60
             ELSE 15
         END
     """)
@@ -54,7 +54,7 @@ def upgrade() -> None:
     op.execute("""
         UPDATE extra_slots
         SET slot_duration_minutes = CASE
-            WHEN type = 'THESIS' THEN 60
+            WHEN type = 'thesis' THEN 60
             ELSE 15
         END
     """)

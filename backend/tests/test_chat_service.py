@@ -57,6 +57,30 @@ class TestChatState:
         assert reply["phase"] == "pick_slot"
         assert len(reply["slots"]) > 0
 
+    async def test_topic_answer_accepted_directly_without_about_keyword(
+        self, db, student, professor, course, enrolled
+    ):
+        """Regression: bot asked for topic, student answered 'recursion' — must accept, not loop."""
+        await add_windows_all_days(db, professor.id)
+
+        # Bot asks for topic (student has professor + course + general type but no task)
+        reply1 = await chat_service.process(
+            f"I need help with {professor.first_name} {professor.last_name} for {course.name}",
+            student.id,
+            db,
+        )
+        assert "topic or task" in reply1["message"].lower()
+        assert reply1["phase"] == "collect"
+
+        # Student replies with bare topic name — no "about" keyword
+        reply2 = await chat_service.process("recursion", student.id, db)
+
+        # Should NOT repeat the topic question
+        assert "topic or task" not in reply2["message"].lower()
+        # Should proceed to slot selection
+        assert reply2["phase"] == "pick_slot"
+        assert len(reply2.get("slots", [])) > 0
+
 
 class TestPreparationPreferredTimes:
     async def test_preparation_vote_includes_preferred_times(self, db, student, professor, course, enrolled):

@@ -381,6 +381,7 @@ async def determine_next_question(
                 return f"Which course? ({names})"
 
         if ctype == ConsultationType.general and not ctx.task:
+            ctx.phase = "task_collect"
             return "Which topic or task are you asking about? (e.g. recursion, SQL joins...)"
 
         break
@@ -808,8 +809,15 @@ async def process(
         prev_phase = state.get("phase", "collect")
         prev_snap = ParsedContext.from_state(state)
 
+        # Task/topic collection phase — the user's message IS the task description
+        if prev_phase == "task_collect" and prev_snap.consultation_type == ConsultationType.general.value:
+            prev_snap.task = text.strip()[:500] or prev_snap.task
+            ctx = prev_snap
+            ctx.phase = "collect"
+            ctx.failed_parse_count = 0
+
         # Thesis topic collection phase — the user's message IS the topic
-        if (
+        elif (
             prev_phase == "thesis_topic"
             and prev_snap.consultation_type == ConsultationType.thesis.value
             and prev_snap.professor_id

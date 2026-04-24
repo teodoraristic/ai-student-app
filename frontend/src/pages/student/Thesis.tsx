@@ -26,7 +26,7 @@ const inputStyle: CSSProperties = {
 export default function Thesis() {
   const { user } = useAuth()
   const { application, loading: appLoading, loadError, cancelApplication, apply } = useThesisApplication()
-  const { rows: profRows, loading: profLoading, error: profError } = useProfessorsDirectory()
+  const { rows: profRows, loading: profLoading, error: profError } = useProfessorsDirectory('thesis')
   const [profId, setProfId] = useState<number | ''>('')
   const [topic, setTopic] = useState('')
   const [submitting, setSubmitting] = useState(false)

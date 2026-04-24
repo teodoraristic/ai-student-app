@@ -62,6 +62,25 @@ def _format_consultation_window_line(w: ConsultationWindow) -> str:
     return f"{day} {tf}–{tt}"
 
 
+def _serialize_student_professor_directory(profs: dict[int, dict], user: User) -> list[dict]:
+    """Shared JSON shape for course-based professor lists (directory + thesis page)."""
+    return [
+        {
+            "professor_id": prof["professor_id"],
+            "name": prof["name"],
+            "courses": prof["courses"],
+            "department": prof.get("department", ""),
+            "open_thesis_spots": prof["open_thesis_spots"],
+            "pinned_note": prof.get("pinned_note"),
+            "hall": prof.get("hall") or "",
+            "consultation_regular_hours": prof.get("consultation_regular_hours", []),
+            "consultation_thesis_hours": prof.get("consultation_thesis_hours", []),
+            "is_my_thesis_professor": prof["professor_id"] == user.thesis_professor_id,
+        }
+        for prof in profs.values()
+    ]
+
+
 async def _attach_consultation_hours(db: AsyncSession, professors: dict[int, dict]) -> None:
     """Fill consultation_regular_hours / consultation_thesis_hours for each professor dict."""
     if not professors:
@@ -169,7 +188,7 @@ async def my_professors(
     """Professors who teach at least one course the student is enrolled in."""
     profs = await _student_consultation_professors(db, user.id)
     await _attach_consultation_hours(db, profs)
-    return list(profs.values())
+    return _serialize_student_professor_directory(profs, user)
 
 
 @router.get("/courses/mine")
@@ -349,21 +368,7 @@ async def thesis_professors(
                 "open_thesis_spots": max(0, profile.max_thesis_students - active_thesis_count),
             }
     await _attach_consultation_hours(db, profs)
-    return [
-        {
-            "professor_id": prof["professor_id"],
-            "name": prof["name"],
-            "courses": prof["courses"],
-            "department": prof.get("department", ""),
-            "open_thesis_spots": prof["open_thesis_spots"],
-            "pinned_note": prof["pinned_note"],
-            "hall": prof.get("hall") or "",
-            "consultation_regular_hours": prof.get("consultation_regular_hours", []),
-            "consultation_thesis_hours": prof.get("consultation_thesis_hours", []),
-            "is_my_thesis_professor": prof["professor_id"] == user.thesis_professor_id,
-        }
-        for prof in profs.values()
-    ]
+    return _serialize_student_professor_directory(profs, user)
 
 
 @router.post("/thesis/apply")

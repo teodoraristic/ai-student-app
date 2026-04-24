@@ -16,16 +16,26 @@ export type ProfessorDirectoryRow = {
   is_my_thesis_professor: boolean
 }
 
-export function useProfessorsDirectory() {
+/** `courses` = professors who share at least one enrolled course (directory). `thesis` = same plus thesis-only supervisor if applicable. */
+export type ProfessorsDirectoryScope = 'courses' | 'thesis'
+
+/**
+ * Load professor directory for students.
+ * - `courses` (default): `/professors/mine` — lecturers from shared classes only.
+ * - `thesis`: `/thesis/professors` — includes approved thesis supervisor even when not on a shared course.
+ */
+export function useProfessorsDirectory(scope: ProfessorsDirectoryScope = 'courses') {
   const [rows, setRows] = useState<ProfessorDirectoryRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const path = scope === 'thesis' ? '/thesis/professors' : '/professors/mine'
 
   const reload = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const { data } = await api.get<ProfessorDirectoryRow[]>('/thesis/professors')
+      const { data } = await api.get<ProfessorDirectoryRow[]>(path)
       setRows(data)
     } catch {
       setRows([])
@@ -33,7 +43,7 @@ export function useProfessorsDirectory() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [path])
 
   useEffect(() => {
     const id = window.setTimeout(() => void reload(), 0)

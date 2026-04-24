@@ -139,8 +139,8 @@ class TestPreparationGuardRegression:
 
 
 class TestThesisBugFix:
-    async def test_thesis_booking_with_active_thesis_shows_proper_message(self, db, student, professor, course, enrolled):
-        """Test that booking thesis with active thesis shows correct message."""
+    async def test_thesis_booking_with_active_thesis_no_slots(self, db, student, professor, course, enrolled):
+        """Test that booking thesis consultation without available slots shows proper message."""
         from backend.db.models import ThesisApplication, ThesisApplicationStatus
 
         # Create active thesis application
@@ -153,16 +153,16 @@ class TestThesisBugFix:
         db.add(app)
         await db.flush()
 
-        # Try to book thesis consultation
-        reply1 = await chat_service.process(
-            f"I want to book a consultation with {professor.first_name} {professor.last_name}",
+        # Try to book thesis consultation (no windows set, so no slots)
+        reply = await chat_service.process(
+            f"I need thesis consultation with {professor.first_name} {professor.last_name}",
             student.id,
             db,
         )
-        reply2 = await chat_service.process("thesis", student.id, db)
 
-        assert "You have an active thesis with this professor" in reply2["message"]
-        assert "thesis page" in reply2["message"]
+        # Should show message about no slots available
+        assert "no thesis consultation slots" in reply["message"].lower()
+        assert reply["phase"] == "done"
 
     async def test_general_intent_overrides_thesis_state(self, db, student, professor, course, enrolled):
         """Regression: general consultation keywords should override stale thesis state."""
@@ -273,3 +273,31 @@ class TestThesisBugFix:
         # even though pending thesis exists
         print(f"\nReply message: {reply['message']}")
         assert "waiting for the professor's decision" not in reply["message"].lower()
+
+    async def test_thesis_supervision_not_allowed_through_chatbot(self, db, student, professor):
+        """Thesis supervision申请 must go through Thesis page, not chatbot."""
+        # Student tries to request thesis supervision through chatbot
+        reply = await chat_service.process(
+            f"I want thesis supervision with {professor.first_name} {professor.last_name}",
+            student.id,
+            db,
+        )
+
+        # Should reject thesis supervision申请
+        msg = reply["message"].lower()
+        assert "thesis" in msg and ("thesis page" in msg or "thesis supervision申请" in msg.lower())
+        assert reply["phase"] == "done"
+
+    async def test_thesis_consultation_rejected_without_active_thesis(self, db, student, professor):
+        """Cannot request thesis consultation without active thesis."""
+        # Try to request thesis consultation without having active thesis
+        reply = await chat_service.process(
+            f"I need thesis consultation with {professor.first_name} {professor.last_name}",
+            student.id,
+            db,
+        )
+
+        # Should be rejected with message about needing active thesis
+        msg = reply["message"].lower()
+        assert "thesis" in msg and "page" in msg
+        assert reply["phase"] == "done"

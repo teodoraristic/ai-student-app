@@ -479,27 +479,14 @@ async def _handle_thesis_flow(
             "context": ctx.to_state(),
         }
 
-    if not app:
-        if not await thesis_service.professor_has_open_thesis_spot(session, ctx.professor_id):
-            prof_name = ctx.professor or "this professor"
-            return {
-                "message": f"{prof_name} has no open thesis supervision spots right now. "
-                           "Try another professor or contact the admin.",
-                "slots": [],
-                "chips": [],
-                "phase": "done",
-                "manual_form": False,
-                "context": ctx.to_state(),
-            }
-        # Need topic before creating application
-        ctx.phase = "thesis_topic"
-        prof_name = ctx.professor or "the professor"
+    if not app or app.status != ThesisApplicationStatus.active:
+        # Thesis supervision申请 only through Thesis page, not chatbot
         return {
-            "message": f"You don't have a thesis application with {prof_name} yet. "
-                       "Please briefly describe your thesis topic so we can submit an application:",
+            "message": "Thesis supervision申请 must be submitted through the Thesis page. "
+                       "This chat is only for consultations on your approved thesis topic.",
             "slots": [],
             "chips": [],
-            "phase": "thesis_topic",
+            "phase": "done",
             "manual_form": False,
             "context": ctx.to_state(),
         }
@@ -962,35 +949,17 @@ async def process(
                 "context": ctx.to_state(),
             }, ctx.to_state())
 
-        # Thesis: check if student has active thesis
-        if ctype == ConsultationType.thesis and ctx.professor_id:
-            app = await session.scalar(
-                select(ThesisApplication).where(
-                    ThesisApplication.student_id == user_id,
-                    ThesisApplication.professor_id == ctx.professor_id,
-                    ThesisApplication.status == ThesisApplicationStatus.active,
-                )
-            )
-            if app:
-                return await _persist_response_state(session, conv, {
-                    "message": "You have an active thesis with this professor. "
-                               "Thesis consultations are scheduled directly through your thesis page.",
-                    "slots": [],
-                    "chips": [],
-                    "phase": "done",
-                    "manual_form": False,
-                    "context": ctx.to_state(),
-                }, ctx.to_state())
-            else:
-                return await _persist_response_state(session, conv, {
-                    "message": "No thesis consultation slots available. "
-                               "First apply for thesis supervision through the chatbot.",
-                    "slots": [],
-                    "chips": [],
-                    "phase": "done",
-                    "manual_form": False,
-                    "context": ctx.to_state(),
-                }, ctx.to_state())
+        # Thesis: no available slots
+        if ctype == ConsultationType.thesis:
+            return await _persist_response_state(session, conv, {
+                "message": "No thesis consultation slots available right now. "
+                           "Please contact your thesis mentor directly or check again later.",
+                "slots": [],
+                "chips": [],
+                "phase": "done",
+                "manual_form": False,
+                "context": ctx.to_state(),
+            }, ctx.to_state())
 
         # Other types: offer waitlist if full sessions exist
         if ctx.professor_id:

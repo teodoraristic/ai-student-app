@@ -202,7 +202,7 @@ class ExtraSlot(Base):
     slot_date: Mapped[date] = mapped_column("date", Date, nullable=False)
     time_from: Mapped[time] = mapped_column(Time, nullable=False)
     time_to: Mapped[time] = mapped_column(Time, nullable=False)
-    slot_type: Mapped[ConsultationType] = mapped_column("type", Enum(ConsultationType), nullable=False)
+    slot_type: Mapped[WindowType] = mapped_column("type", Enum(WindowType), nullable=False)
     slot_duration_minutes: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

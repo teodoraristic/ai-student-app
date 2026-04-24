@@ -44,8 +44,9 @@ logger = logging.getLogger(__name__)
 RESET_KEYWORDS = ["start over", "restart", "reset", "nevermind", "cancel everything", "begin again"]
 CANCEL_KEYWORDS = ["cancel", "remove", "delete booking", "undo"]
 
-# GRADED_WORK_REVIEW checked first — "review" maps here, not preparation
-# NOTE: preparation keywords removed to disable type from user-facing flows (Phase 2 deferral)
+# GRADED_WORK_REVIEW checked first — "review" maps here, not preparation.
+# GENERAL must appear before PREPARATION so e.g. "question" matches general, not a prep substring.
+# PREPARATION keywords still match for intent so Phase 1 can show the deferral message (not offered in type lists).
 TYPE_KEYWORDS: dict[ConsultationType, list[str]] = {
     ConsultationType.graded_work_review: [
         "graded work",
@@ -78,6 +79,15 @@ TYPE_KEYWORDS: dict[ConsultationType, list[str]] = {
         "help",
         "don't know",
         "homework",
+    ],
+    ConsultationType.preparation: [
+        "prepare",
+        "preparation",
+        "study",
+        "studying",
+        "before the exam",
+        "exam prep",
+        "prep session",
     ],
 }
 
@@ -296,7 +306,10 @@ async def process_reply(
     session: AsyncSession, ctx: ParsedContext, new_text: str, student_id: int
 ) -> ParsedContext:
     mt = match_type(new_text)
-    if not ctx.consultation_type and mt:
+    # Always refresh type from the latest message when keywords match, so stale
+    # conversation state (e.g. PREPARATION from Phase 2 experiments) cannot block
+    # a new GENERAL / thesis / review intent.
+    if mt is not None:
         ctx.consultation_type = mt.value
 
     ctype = ConsultationType(ctx.consultation_type) if ctx.consultation_type else None
@@ -889,10 +902,8 @@ async def process(
             "context": conv.state,
         }
 
-    ctype = ConsultationType(ctx.consultation_type)  # type: ignore[arg-type]
-
-    # Preparation: disabled for Phase 1 — reject if user somehow ends up here
-    if ctype == ConsultationType.preparation:
+    # Preparation: disabled for Phase 1 — only when context explicitly requests it.
+    if ctx.consultation_type == ConsultationType.preparation.value:
         return await _persist_response_state(session, conv, {
             "message": "Exam preparation consultations are not available yet.",
             "slots": [],
@@ -901,6 +912,8 @@ async def process(
             "manual_form": False,
             "context": {},
         }, ctx.to_state())
+
+    ctype = ConsultationType(ctx.consultation_type)  # type: ignore[arg-type]
 
     # Preparation vote registration: kept for Phase 2, not called in Phase 1
     # if ctype == ConsultationType.preparation and ctx.professor_id and ctx.course_id:

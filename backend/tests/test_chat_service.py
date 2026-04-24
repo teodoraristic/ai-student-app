@@ -60,11 +60,10 @@ class TestChatState:
 
 class TestPreparationPreferredTimes:
     async def test_preparation_vote_includes_preferred_times(self, db, student, professor, course, enrolled):
-        """Test that preparation is disabled in Phase 1 — user gets 'not available yet' message."""
+        """Natural-language preparation intent is recognized and deferred in Phase 1."""
         from backend.db.models import AcademicEvent, AcademicEventType
         from datetime import date, timedelta
 
-        # Create an upcoming exam
         exam = AcademicEvent(
             course_id=course.id,
             event_type=AcademicEventType.exam,
@@ -74,17 +73,13 @@ class TestPreparationPreferredTimes:
         db.add(exam)
         await db.flush()
 
-        # Start preparation conversation — should be rejected in Phase 1
         reply1 = await chat_service.process(
             f"I want to book preparation with {professor.first_name} {professor.last_name}",
             student.id,
             db,
         )
-        # Phase 1: preparation keywords removed, so chatbot asks for consultation type
-        assert "What is the consultation about?" in reply1["message"]
+        assert "not available yet" in reply1["message"].lower()
 
-        # Manually provide "preparation" via structured input (simulating if user somehow specifies it)
-        # This should trigger the Phase 1 rejection
         reply2 = await chat_service.process(
             "PREPARATION",
             student.id,
@@ -96,6 +91,51 @@ class TestPreparationPreferredTimes:
             },
         )
         assert "not available yet" in reply2["message"].lower()
+
+
+class TestPreparationGuardRegression:
+    async def test_question_keyword_never_emits_preparation_deferral(
+        self, db, student, professor, course, enrolled
+    ):
+        """Regression: 'question' must map to GENERAL, not stale PREPARATION state."""
+        from backend.services.chat_service import get_or_create_conversation
+
+        await add_windows_all_days(db, professor.id)
+        conv = await get_or_create_conversation(db, student.id)
+        conv.state = {
+            "professor": f"{professor.first_name} {professor.last_name}",
+            "professor_id": professor.id,
+            "consultation_type": "PREPARATION",
+            "phase": "collect",
+            "failed_parse_count": 0,
+        }
+        await db.flush()
+
+        reply = await chat_service.process(
+            "I want to book profesor Markovic for question number 3",
+            student.id,
+            db,
+        )
+        assert "not available yet" not in reply["message"].lower()
+        msg = reply["message"].lower()
+        assert "which course" in msg or "topic or task" in msg
+
+    async def test_exam_prep_keywords_emit_preparation_deferral(self, db, student, professor, course, enrolled):
+        reply = await chat_service.process(
+            f"I need exam prep with {professor.first_name} {professor.last_name} for {course.name}",
+            student.id,
+            db,
+        )
+        assert "not available yet" in reply["message"].lower()
+
+    async def test_prepare_alone_first_message_emits_preparation_deferral(self, db, student, professor, course, enrolled):
+        """Bare 'prepare' / prep phrasing should classify as preparation and hit the deferral once complete."""
+        reply = await chat_service.process(
+            f"prepare for the exam with {professor.first_name} {professor.last_name} {course.name}",
+            student.id,
+            db,
+        )
+        assert "not available yet" in reply["message"].lower()
 
 
 class TestThesisBugFix:

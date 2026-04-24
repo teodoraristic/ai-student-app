@@ -163,3 +163,113 @@ class TestThesisBugFix:
 
         assert "You have an active thesis with this professor" in reply2["message"]
         assert "thesis page" in reply2["message"]
+
+    async def test_general_intent_overrides_thesis_state(self, db, student, professor, course, enrolled):
+        """Regression: general consultation keywords should override stale thesis state."""
+        from backend.services.chat_service import get_or_create_conversation
+        from backend.db.models import ThesisApplication, ThesisApplicationStatus
+
+        await add_windows_all_days(db, professor.id)
+
+        # Create pending thesis application
+        app = ThesisApplication(
+            student_id=student.id,
+            professor_id=professor.id,
+            topic_description="Test thesis",
+            status=ThesisApplicationStatus.pending,
+        )
+        db.add(app)
+        await db.flush()
+
+        # Simulate student having old conversation state with thesis type
+        conv = await get_or_create_conversation(db, student.id)
+        conv.state = {
+            "professor": f"{professor.first_name} {professor.last_name}",
+            "professor_id": professor.id,
+            "consultation_type": "THESIS",
+            "phase": "collect",
+            "failed_parse_count": 0,
+        }
+        await db.flush()
+
+        # Student clicks "General consultation" suggestion and sends message
+        reply = await chat_service.process(
+            "I need help with a course topic",
+            student.id,
+            db,
+        )
+
+        # Should show general consultation options, not thesis waiting message
+        assert "waiting for the professor's decision" not in reply["message"].lower()
+
+    async def test_general_intent_does_not_show_thesis_status_for_active_thesis(self, db, student, professor, course, enrolled):
+        """Student with ACTIVE thesis should not see 'waiting' message when requesting general consultation."""
+        from backend.services.chat_service import get_or_create_conversation
+        from backend.db.models import ThesisApplication, ThesisApplicationStatus
+
+        await add_windows_all_days(db, professor.id)
+
+        # Create ACTIVE (approved) thesis application
+        app = ThesisApplication(
+            student_id=student.id,
+            professor_id=professor.id,
+            topic_description="Test thesis",
+            status=ThesisApplicationStatus.active,
+        )
+        db.add(app)
+        await db.flush()
+
+        # Student has stale state without professor info
+        conv = await get_or_create_conversation(db, student.id)
+        conv.state = {}
+        await db.flush()
+
+        # Student sends general request mentioning this professor and course
+        reply = await chat_service.process(
+            f"I need help with a course topic with {professor.first_name} {professor.last_name} for {course.name}",
+            student.id,
+            db,
+        )
+
+        # Should NOT show "waiting" message since thesis is active, not pending
+        assert "waiting for the professor's decision" not in reply["message"].lower()
+
+    async def test_bug_general_button_classified_as_thesis(self, db, student, professor, course, enrolled):
+        """Bug: clicking 'General consultation' button but bot replies with thesis message."""
+        from backend.services.chat_service import get_or_create_conversation
+        from backend.db.models import ThesisApplication, ThesisApplicationStatus
+
+        await add_windows_all_days(db, professor.id)
+
+        # Student already has active thesis (approved)
+        app = ThesisApplication(
+            student_id=student.id,
+            professor_id=professor.id,
+            topic_description="My approved thesis",
+            status=ThesisApplicationStatus.active,
+        )
+        db.add(app)
+        await db.flush()
+
+        # Student also has PENDING thesis application with same professor (somehow)
+        # This might be edge case or from previous attempt
+        pending = ThesisApplication(
+            student_id=student.id,
+            professor_id=professor.id,
+            topic_description="Old pending application",
+            status=ThesisApplicationStatus.pending,
+        )
+        db.add(pending)
+        await db.flush()
+
+        # Student clicks "General consultation" suggestion → "I need help with a course topic"
+        reply = await chat_service.process(
+            f"I need help with a course topic for {course.name}",
+            student.id,
+            db,
+        )
+
+        # BUG: bot should NOT show "waiting" message for general request
+        # even though pending thesis exists
+        print(f"\nReply message: {reply['message']}")
+        assert "waiting for the professor's decision" not in reply["message"].lower()

@@ -45,7 +45,8 @@ RESET_KEYWORDS = ["start over", "restart", "reset", "nevermind", "cancel everyth
 CANCEL_KEYWORDS = ["cancel", "remove", "delete booking", "undo"]
 
 # GRADED_WORK_REVIEW checked first — "review" maps here, not preparation.
-# GENERAL must appear before PREPARATION so e.g. "question" matches general, not a prep substring.
+# GENERAL before THESIS — if text has both "help"+"thesis", it's likely just a student asking for general help mentioning thesis.
+# GENERAL before PREPARATION so e.g. "question" matches general, not a prep substring.
 # PREPARATION keywords still match for intent so Phase 1 can show the deferral message (not offered in type lists).
 TYPE_KEYWORDS: dict[ConsultationType, list[str]] = {
     ConsultationType.graded_work_review: [
@@ -61,13 +62,6 @@ TYPE_KEYWORDS: dict[ConsultationType, list[str]] = {
         "check my points",
         "my result",
     ],
-    ConsultationType.thesis: [
-        "thesis",
-        "dissertation",
-        "final project",
-        "mentor",
-        "supervisor",
-    ],
     ConsultationType.general: [
         "question",
         "don't understand",
@@ -79,6 +73,13 @@ TYPE_KEYWORDS: dict[ConsultationType, list[str]] = {
         "help",
         "don't know",
         "homework",
+    ],
+    ConsultationType.thesis: [
+        "thesis",
+        "dissertation",
+        "final project",
+        "mentor",
+        "supervisor",
     ],
     ConsultationType.preparation: [
         "prepare",
@@ -446,12 +447,23 @@ async def _handle_thesis_flow(
     if not ctx.professor_id:
         return None  # determine_next_question handles professor prompt
 
-    app = await session.scalar(
+    # Find application, prioritizing active > pending > rejected
+    apps = list((await session.scalars(
         select(ThesisApplication).where(
             ThesisApplication.student_id == user.id,
             ThesisApplication.professor_id == ctx.professor_id,
         )
-    )
+    )).all())
+
+    # Prioritize by status: active first, then pending, then rejected
+    app = None
+    for status in [ThesisApplicationStatus.active, ThesisApplicationStatus.pending, ThesisApplicationStatus.rejected]:
+        for a in apps:
+            if a.status == status:
+                app = a
+                break
+        if app:
+            break
 
     if app and app.status == ThesisApplicationStatus.rejected:
         prof = await session.get(User, ctx.professor_id)

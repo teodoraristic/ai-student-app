@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr *)",
+      "Bash(python -c \"import ast, sys; files = ['backend/services/chat_service.py', 'backend/services/slot_service.py', 'backend/services/booking_service.py', 'backend/workers/tasks.py']; [print\\(f'OK: {f}'\\) if ast.parse\\(open\\(f\\).read\\(\\)\\) else None for f in files]\")",
+      "Bash(python -c ' *)",
+      "Bash(pip install *)",
+      "Bash(python -m pytest backend/tests/ -v)"
+    ]
+  }
+}

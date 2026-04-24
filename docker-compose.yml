@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-studentapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-studentapp}
+      POSTGRES_DB: ${POSTGRES_DB:-studentapp}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-studentapp} -d ${POSTGRES_DB:-studentapp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

@@ -1,0 +1,270 @@
+---
+alwaysApply: true
+---
+
+# .cursorrules — University Consultation Booking App
+
+## Project Context
+
+This is a web application for scheduling university consultations between students and professors. Three roles: student, professor, admin.
+The app is currently developed and run locally. AWS deployment comes later — everything built now must be designed to move to AWS with minimal rework.
+The chatbot logic is currently rule-based (keyword matching, fuzzy matching) and runs without an LLM. In the future, all chatbot logic will be replaced by an AWS AI service — code must be written so that replacement is a minimal intervention.
+
+---
+
+## 1. ARCHITECTURAL RULES — never break these
+
+### Separation of concerns
+
+- All business logic lives exclusively in `backend/services/` — never directly in routers
+- Routers are thin: validate input (Pydantic), call service, return response — nothing more
+- The frontend must never compute anything that depends on business rules (e.g. whether exam period is active, which consultation types are available) — that always comes from the backend
+- Every page reads data only through `api/client.js` — never a raw fetch inside a component
+
+### Chatbot isolation (critical for future AWS migration)
+
+- All chatbot logic must live in `backend/services/chat_service.py` — not a single line of parsing, intent detection, or response generation logic belongs in `backend/routers/chat.py`
+- The `chat.py` router may only do this:
+  ```python
+  @router.post("/chat")
+  async def chat(msg: ChatMessage, user=Depends(get_current_user), db=Depends(get_db)):
+      response = await chat_service.process(msg.text, user.id, db)
+      return response
+  ```
+- `chat_service.py` must expose a clearly defined interface:
+  ```python
+  async def process(text: str, student_id: int, db) -> ChatResponse
+  ```
+  When AWS AI arrives, only `chat_service.py` changes — the router, frontend, and DB remain untouched.
+- Conversation context (`ParsedContext`) is stored exclusively in the `conversations.state` JSONB column — never in server memory, never in the frontend
+
+### EmailProvider abstraction
+
+- Never call SendGrid directly from application code — always go through `services/email_service.py`
+- Interface:
+  ```python
+  class EmailProvider:
+      async def send(self, to: str, subject: str, body: str) -> None: ...
+  ```
+- `EMAIL_PROVIDER=console|sendgrid` in `.env` determines which implementation is used
+- When AWS SES arrives, add `SESEmailProvider` — nothing else changes
+
+### Configuration
+
+- No business value may be hardcoded in application code:
+  - ❌ `if votes >= 5:`
+  - ✅ `threshold = await get_config("auto_schedule_vote_threshold", db)`
+- All values live in the `system_config` table (key/value)
+- Default values are set only in `seed.py`, never in application code
+
+### Database
+
+- Always use async SQLAlchemy sessions — never sync
+- Never write raw SQL strings — use SQLAlchemy ORM or the `select()` builder
+- Every mutation (INSERT, UPDATE, DELETE) must be accompanied by a write to `audit_log` — `audit_middleware.py` does this automatically; do not write it manually in services unless it is a special case
+- Migrations exclusively through Alembic — never `CREATE TABLE` or `ALTER TABLE` directly
+
+### Authentication and authorization
+
+- Every endpoint must have `Depends(get_current_user)` and a role check
+- Role checks must be applied via a decorator in `auth_middleware.py`, not inline in each endpoint:
+  ```python
+  @require_role("student")
+  @router.get("/bookings/mine")
+  ```
+- Thesis consultation slots additionally verify `ThesisApplication.status == ACTIVE` on the backend — hiding in the UI is not sufficient
+
+---
+
+## 2. CODE RULES
+
+### Backend (Python / FastAPI)
+
+- Python 3.11+, type hints required on all functions
+- Pydantic v2 for all request/response models — never `dict` as an endpoint return type
+- Async everywhere there is I/O — never `time.sleep()`, always `asyncio.sleep()`
+- Errors: use FastAPI `HTTPException` with clear `detail` messages — never `return {"error": ...}`
+- Logging: `import logging` at the top of every file, never `print()` in production code
+- `.env` values read exclusively through `config.py` (Pydantic `BaseSettings`) — never `os.environ.get()` directly in services
+
+### Frontend (React)
+
+- Functional components and hooks only — never class components
+- Every API call lives in a custom hook inside the `hooks/` folder — never directly inside a component
+- Loading and error state are required for every API call — never show a blank screen while waiting
+- Tailwind classes for styling — never inline `style={}` except for dynamic values that cannot be expressed otherwise
+- Forms: controlled components with local state — never `document.getElementById`
+- `AuthContext` is the single source of truth for user and role — never read the JWT directly inside a component
+
+### Shared rules
+
+- Never commit the `.env` file — `.env.example` with all keys but no values must always exist
+- Never log passwords, tokens, or OTP values — not even in dev mode
+- Never return `password_hash`, `one_time_password_hash`, or internal user IDs in an API response that goes to a student or professor
+
+---
+
+## 3. FOLDER STRUCTURE — do not change without discussion
+
+```
+backend/
+  main.py
+  config.py
+  db/
+    base.py           # engine, session
+    models.py         # all ORM models
+    seed.py           # mock data
+  routers/            # thin routers, HTTP layer only
+  services/           # all business logic
+    chat_service.py   # ISOLATED — the only file that changes for AWS AI
+    slot_service.py
+    booking_service.py
+    email_service.py  # EmailProvider interface + implementations
+    auth_service.py
+    waitlist_service.py
+    scheduler_service.py
+  middleware/
+    auth_middleware.py
+    audit_middleware.py
+  workers/
+    tasks.py          # APScheduler tasks
+
+frontend/src/
+  pages/              # pages by role (student/ professor/ admin/)
+  components/         # reusable UI components
+  hooks/              # custom hooks for API calls
+  contexts/           # AuthContext
+  api/
+    client.js         # axios instance, JWT interceptor
+```
+
+New files go in the appropriate folder. If it is not clear where — ask before creating.
+
+---
+
+## 4. AWS MIGRATION READINESS — design rules
+
+These rules exist so that the future migration to AWS is as painless as possible:
+
+| What changes on AWS | Where it is isolated now | What is NOT touched |
+|---|---|---|
+| Chatbot logic → AWS AI (Bedrock / Lambda) | `chat_service.py` | Router, frontend, DB |
+| Email → AWS SES | `email_service.py` (new `SESEmailProvider`) | Everything else |
+| Background jobs → AWS EventBridge + Lambda | `workers/tasks.py` | Everything else |
+| Deployment → AWS ECS / Fargate | `docker-compose.yml` → `Dockerfile` | Application code |
+| Database → AWS RDS PostgreSQL | Connection string in `.env` | Models and migrations |
+
+**Concrete rules:**
+- Never use local file paths to store data — everything goes to the database or environment variables
+- Never use server-side sessions — only JWT in the Authorization header
+- All environment-specific values in `.env` — never if/else on hostname in code
+- Docker containers must be stateless — restarting a container must not affect user data
+
+---
+
+## 5. WHAT IS MVP — implement first
+
+MVP is defined as: **a student can book a consultation through the chatbot, and a professor can view and manage those bookings.**
+
+### MVP — MUST work
+
+**Auth (all roles)**
+- [ ] Login with email + password
+- [ ] OTP flow on first login (forced password change)
+- [ ] JWT protection on all routes, role-based access
+
+**Admin**
+- [ ] Create accounts (student, professor) with OTP generation
+- [ ] Enter exam period (date_from, date_to)
+- [ ] Enter midterms and exams (course, date, type)
+- [ ] Enter courses and student enrollments
+
+**Professor**
+- [ ] Define weekly consultation windows (day, time_from, time_to, type: REGULAR | THESIS)
+- [ ] Block specific dates
+- [ ] View registered students per slot (grouped by task, anonymous question visible)
+- [ ] Mark a slot as completed or no-show
+
+**Student — chatbot**
+- [ ] Free-form first message → parser extracts professor, type, course, task, group size, urgency
+- [ ] Follow-up questions until all required fields are filled (one at a time)
+- [ ] Manual dropdown fallback after 2 failed parse attempts
+- [ ] Show available slots as chip buttons
+- [ ] Confirm booking → create `Booking` record
+- [ ] Cancel a booking through chat
+
+**Student — direct (without chatbot)**
+- [ ] View my bookings (upcoming + past)
+- [ ] Browse professors with profiles and `pinned_note`
+
+**Notifications (in-app)**
+- [ ] Create a notification on every significant action (confirmed, cancelled, no-show)
+- [ ] Display in UI with 60-second polling
+- [ ] Mark as read
+
+---
+
+### POST-MVP — implement if time allows
+
+These features **do not block** the app from working. Database tables and API routes for them must exist (to avoid future migrations), but UI and business logic can be stubs.
+
+**Scheduler (APScheduler tasks)**
+- [ ] 7 days before exam — notify professor for preparation session + auto-escalation
+- [ ] Reminders 24h and 1h before slot
+- [ ] Feedback trigger 2h after slot ends
+- [ ] Waitlist check on cancellation (with 2h confirmation window)
+- [ ] Cancellation penalty detection
+- [ ] Scheduler log view in admin panel + manual trigger button
+
+**Thesis flow**
+- [ ] Student applies for thesis supervision (form + pending status)
+- [ ] Professor accepts/rejects from inbox
+- [ ] Student sees thesis slots only after being accepted
+
+**Waitlist**
+- [ ] Join waitlist when a slot is full
+- [ ] Notify when a spot opens
+- [ ] Appeal penalty
+
+**Dashboard and analytics**
+- [ ] Professor stats (total, by type, no-show rate, avg feedback)
+- [ ] Predictive model (previous year's data)
+- [ ] Admin global dashboard
+
+**Email notifications**
+- [ ] Booking confirmation
+- [ ] Reminder emails
+- [ ] Waitlist notification
+
+**Other**
+- [ ] Post-consultation feedback form (rating + comment)
+- [ ] System config editor for admin
+- [ ] Privacy page + consent modal
+- [ ] Announcements (admin → all students)
+- [ ] FAQ knowledge base (admin editor + chatbot integration)
+- [ ] One-off extra slots outside regular windows
+
+---
+
+## 6. STUB PATTERN for post-MVP
+
+For every post-MVP feature that has an endpoint — the endpoint must exist but may return a stub:
+
+```python
+# routers/scheduler.py
+@router.post("/admin/scheduler/run/{task_name}")
+@require_role("admin")
+async def manual_trigger(task_name: str):
+    # TODO: post-MVP — implement APScheduler manual trigger
+    return {"status": "stub", "message": f"Task {task_name} is not yet implemented"}
+```
+
+```jsx
+// pages/admin/SchedulerLog.jsx
+export default function SchedulerLog() {
+  // TODO: post-MVP
+  return <ComingSoon feature="Scheduler log" />
+}
+```
+
+The `<ComingSoon>` component must exist as a reusable UI element that renders a placeholder without errors.

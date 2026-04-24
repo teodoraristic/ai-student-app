@@ -2,7 +2,7 @@
 
 import logging
 import math
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -113,6 +113,10 @@ async def ensure_session_for_window_slot(
     time_to,
     capacity: int = 20,
 ) -> ConsultationSession:
+    """
+    Ensure a ConsultationSession exists for the given slot.
+    Callers must pass the correct capacity (1 for all types in Phase 1).
+    """
     existing = await session.scalar(
         select(ConsultationSession).where(
             ConsultationSession.professor_id == professor_id,
@@ -126,7 +130,6 @@ async def ensure_session_for_window_slot(
     if existing:
         return existing
 
-    cap = 1 if ctype == ConsultationType.thesis else capacity
     used = 0
     fmt = determine_format(used + 1, ctype)
     cs = ConsultationSession(
@@ -138,7 +141,7 @@ async def ensure_session_for_window_slot(
         time_to=time_to,
         format=fmt,
         status=SessionStatus.confirmed,
-        capacity=cap,
+        capacity=capacity,
     )
     session.add(cs)
     await session.flush()
@@ -155,6 +158,10 @@ async def get_free_slots(
     student_id: int,
     next_weeks: int = 3,
 ) -> list[ConsultationSession]:
+    """
+    Phase 1: Returns 15-min sub-slots for GENERAL and GRADED_WORK_REVIEW,
+    60-min sub-slots for THESIS. All slots have capacity=1.
+    """
     if ctype == ConsultationType.thesis:
         active = await session.scalar(
             select(ThesisApplication).where(
@@ -170,9 +177,8 @@ async def get_free_slots(
     now_time = datetime.now().time()
     end = today + timedelta(weeks=next_weeks)
 
-    # PREPARATION: only show professor-announced sessions
+    # PREPARATION: only show professor-announced sessions (kept for Phase 2, should not be called in Phase 1)
     if ctype == ConsultationType.preparation:
-        in_exam = await is_exam_period(session, today)
         announced = (
             await session.scalars(
                 select(ConsultationSession).where(
@@ -188,7 +194,6 @@ async def get_free_slots(
         ).all()
         results = []
         for cs in announced:
-            # During exam period, only professor-announced sessions are allowed (already filtered)
             if cs.session_date == today and cs.time_to <= now_time:
                 continue
             used = await _used_capacity(session, cs.id)
@@ -197,7 +202,7 @@ async def get_free_slots(
         results.sort(key=lambda s: (s.session_date, s.time_from))
         return results
 
-    # GRADED_WORK_REVIEW: only show professor-announced sessions
+    # GRADED_WORK_REVIEW: professor-announced sessions split into 15-min sub-slots
     if ctype == ConsultationType.graded_work_review:
         announced = (
             await session.scalars(
@@ -216,9 +221,25 @@ async def get_free_slots(
         for cs in announced:
             if cs.session_date == today and cs.time_to <= now_time:
                 continue
-            used = await _used_capacity(session, cs.id)
-            if used + group_size <= cs.capacity:
-                results.append(cs)
+            # Generate 15-min sub-slots from announced session
+            sub_slots = generate_sub_slots(cs.time_from, cs.time_to, 15)
+            for sub_from, sub_to in sub_slots:
+                # Skip past sub-slots on today
+                if cs.session_date == today and sub_to <= now_time:
+                    continue
+                sub_session = await ensure_session_for_window_slot(
+                    session,
+                    professor_id=professor_id,
+                    course_id=course_id,
+                    ctype=ctype,
+                    slot_date=cs.session_date,
+                    time_from=sub_from,
+                    time_to=sub_to,
+                    capacity=1,
+                )
+                used = await _used_capacity(session, sub_session.id)
+                if used + group_size <= sub_session.capacity:
+                    results.append(sub_session)
         results.sort(key=lambda s: (s.session_date, s.time_from))
         return results
 
@@ -227,6 +248,7 @@ async def get_free_slots(
         if await is_exam_period(session, today):
             return []
 
+    # Enrollment check for non-thesis types
     if ctype != ConsultationType.thesis:
         enrolled = await session.scalar(
             select(CourseStudent).where(
@@ -237,6 +259,7 @@ async def get_free_slots(
         if not enrolled:
             raise ValueError("Not enrolled in this course")
 
+    # GENERAL and THESIS: derive sub-slots from weekly windows + extra slots
     wtype = _window_type_for_consultation(ctype)
     windows = (
         await session.scalars(
@@ -258,24 +281,28 @@ async def get_free_slots(
         for w in windows:
             if w.day_of_week.lower() != wd:
                 continue
-            # Skip past time slots on today
-            if d == today and w.time_to <= now_time:
-                continue
-            cs = await ensure_session_for_window_slot(
-                session,
-                professor_id=professor_id,
-                course_id=course_id,
-                ctype=ctype,
-                slot_date=d,
-                time_from=w.time_from,
-                time_to=w.time_to,
-                capacity=20,
-            )
-            used = await _used_capacity(session, cs.id)
-            if used + group_size <= cs.capacity:
-                if cs not in results:
-                    results.append(cs)
+            # Generate sub-slots based on window's slot_duration_minutes
+            sub_slots = generate_sub_slots(w.time_from, w.time_to, w.slot_duration_minutes)
+            for sub_from, sub_to in sub_slots:
+                # Skip past sub-slots on today
+                if d == today and sub_to <= now_time:
+                    continue
+                cs = await ensure_session_for_window_slot(
+                    session,
+                    professor_id=professor_id,
+                    course_id=course_id,
+                    ctype=ctype,
+                    slot_date=d,
+                    time_from=sub_from,
+                    time_to=sub_to,
+                    capacity=1,  # Phase 1: all slots have capacity 1
+                )
+                used = await _used_capacity(session, cs.id)
+                if used + group_size <= cs.capacity:
+                    if cs not in results:
+                        results.append(cs)
 
+    # Extra slots: also split into sub-slots
     extras = (
         await session.scalars(
             select(ExtraSlot).where(
@@ -289,21 +316,24 @@ async def get_free_slots(
     for ex in extras:
         if ex.slot_date in blocked:
             continue
-        if ex.slot_date == today and ex.time_to <= now_time:
-            continue
-        cs = await ensure_session_for_window_slot(
-            session,
-            professor_id=professor_id,
-            course_id=course_id,
-            ctype=ctype,
-            slot_date=ex.slot_date,
-            time_from=ex.time_from,
-            time_to=ex.time_to,
-            capacity=20,
-        )
-        used = await _used_capacity(session, cs.id)
-        if used + group_size <= cs.capacity and cs not in results:
-            results.append(cs)
+        # Generate sub-slots based on extra slot's slot_duration_minutes
+        sub_slots = generate_sub_slots(ex.time_from, ex.time_to, ex.slot_duration_minutes)
+        for sub_from, sub_to in sub_slots:
+            if ex.slot_date == today and sub_to <= now_time:
+                continue
+            cs = await ensure_session_for_window_slot(
+                session,
+                professor_id=professor_id,
+                course_id=course_id,
+                ctype=ctype,
+                slot_date=ex.slot_date,
+                time_from=sub_from,
+                time_to=sub_to,
+                capacity=1,  # Phase 1: all slots have capacity 1
+            )
+            used = await _used_capacity(session, cs.id)
+            if used + group_size <= cs.capacity and cs not in results:
+                results.append(cs)
 
     results.sort(key=lambda s: (s.session_date, s.time_from))
     return results
@@ -346,3 +376,25 @@ def iter_days(start: date, end: date):
     while d <= end:
         yield d
         d += timedelta(days=1)
+
+
+def generate_sub_slots(
+    time_from: time, time_to: time, duration_minutes: int
+) -> list[tuple[time, time]]:
+    """
+    Generate sub-slots of given duration between time_from and time_to.
+    Returns list of (start_time, end_time) tuples.
+    """
+    start_dt = datetime.combine(date.today(), time_from)
+    end_dt = datetime.combine(date.today(), time_to)
+    slots = []
+    
+    current = start_dt
+    while current < end_dt:
+        slot_end = current + timedelta(minutes=duration_minutes)
+        if slot_end > end_dt:
+            break
+        slots.append((current.time(), slot_end.time()))
+        current = slot_end
+    
+    return slots

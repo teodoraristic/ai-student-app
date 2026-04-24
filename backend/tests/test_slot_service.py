@@ -6,8 +6,12 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import (
+    BlockedDate,
+    Booking,
+    BookingStatus,
     ConsultationSession,
     ConsultationType,
+    ConsultationWindow,
     ExamPeriod,
     SessionFormat,
     SessionStatus,
@@ -17,6 +21,8 @@ from backend.db.models import (
     WindowType,
 )
 from backend.services import slot_service
+
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 from .conftest import (
     add_windows_all_days,
@@ -178,6 +184,7 @@ class TestPreparationSlots:
 
 class TestGradedWorkReviewSlots:
     async def test_only_announced_returned(self, db, student, professor, course, enrolled):
+        """GRADED_WORK_REVIEW announced sessions are split into 15-min sub-slots."""
         cs = future_session(professor.id, course.id, ConsultationType.graded_work_review, announced=True)
         db.add(cs)
         await db.flush()
@@ -191,7 +198,9 @@ class TestGradedWorkReviewSlots:
             student_id=student.id,
         )
 
-        assert len(slots) == 1
+        # Phase 1: 1-hour announced session (10:00-11:00) is split into 4 x 15-min sub-slots
+        assert len(slots) == 4
+        assert all(s.consultation_type == ConsultationType.graded_work_review for s in slots)
 
     async def test_no_announced_empty(self, db, student, professor, course, enrolled):
         slots = await slot_service.get_free_slots(
@@ -310,3 +319,311 @@ class TestAvailableTypesExamPeriod:
         types = slot_service.get_available_types(today, exam_period=False)
         assert ConsultationType.general in types
         assert ConsultationType.preparation not in types  # Phase 1: disabled
+
+
+class TestSubSlotSplitting:
+    """Phase 1: Test 15-min and 60-min sub-slot generation."""
+
+    async def test_general_window_yields_15min_subslots(self, db, student, professor, course, enrolled):
+        """Test that a 2-hour GENERAL window generates 8 sub-slots of 15 minutes each."""
+        from datetime import time
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week="monday",
+            time_from=time(12, 0),
+            time_to=time(14, 0),
+            window_type=WindowType.regular,
+            slot_duration_minutes=15,
+        )
+        db.add(window)
+        await db.flush()
+        
+        # Get the next Monday
+        today = date.today()
+        days_ahead = 0 - today.weekday()  # Monday is 0
+        if days_ahead <= 0:
+            days_ahead += 7
+        next_monday = today + timedelta(days=days_ahead)
+        
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=course.id,
+            ctype=ConsultationType.general,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=2,
+        )
+        
+        # Filter for just the next monday
+        monday_slots = [s for s in slots if s.session_date == next_monday]
+        
+        assert len(monday_slots) == 8  # 2 hours = 8 x 15-min slots
+        # Verify times: 12:00-12:15, 12:15-12:30, ..., 13:45-14:00
+        assert monday_slots[0].time_from == time(12, 0)
+        assert monday_slots[0].time_to == time(12, 15)
+        assert monday_slots[7].time_from == time(13, 45)
+        assert monday_slots[7].time_to == time(14, 0)
+
+    async def test_thesis_window_yields_60min_subslots(self, db, student, professor, course, enrolled):
+        """Test that a 2-hour THESIS window generates 2 sub-slots of 60 minutes each."""
+        from datetime import time
+        
+        # First, create an active thesis application
+        thesis = ThesisApplication(
+            student_id=student.id,
+            professor_id=professor.id,
+            topic_description="Test thesis",
+            status=ThesisApplicationStatus.active,
+        )
+        db.add(thesis)
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week="tuesday",
+            time_from=time(12, 0),
+            time_to=time(14, 0),
+            window_type=WindowType.thesis,
+            slot_duration_minutes=60,
+        )
+        db.add(window)
+        await db.flush()
+        
+        # Get the next Tuesday
+        today = date.today()
+        days_ahead = 1 - today.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        next_tuesday = today + timedelta(days=days_ahead)
+        
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=None,
+            ctype=ConsultationType.thesis,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=2,
+        )
+        
+        tuesday_slots = [s for s in slots if s.session_date == next_tuesday]
+        
+        assert len(tuesday_slots) == 2  # 2 hours = 2 x 60-min slots
+        assert tuesday_slots[0].time_from == time(12, 0)
+        assert tuesday_slots[0].time_to == time(13, 0)
+        assert tuesday_slots[1].time_from == time(13, 0)
+        assert tuesday_slots[1].time_to == time(14, 0)
+
+    async def test_past_subslots_today_skipped(self, db, student, professor, course, enrolled):
+        """Test that past sub-slots on today are skipped but future ones are returned."""
+        from datetime import datetime, time
+        
+        now = datetime.now()
+        # Create window that spans past and future on today
+        window_start = time(now.hour - 1 if now.hour > 0 else 0, 0)
+        window_end = time(now.hour + 2 if now.hour < 22 else 23, 59)
+        
+        wd = WEEKDAYS[date.today().weekday()]
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week=wd,
+            time_from=window_start,
+            time_to=window_end,
+            window_type=WindowType.regular,
+            slot_duration_minutes=15,
+        )
+        db.add(window)
+        await db.flush()
+        
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=course.id,
+            ctype=ConsultationType.general,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=1,
+        )
+        
+        today_slots = [s for s in slots if s.session_date == date.today()]
+        
+        # All returned slots should be in the future
+        for s in today_slots:
+            assert s.time_to > now.time(), f"Slot {s.time_from}-{s.time_to} should be after {now.time()}"
+
+    async def test_booking_only_takes_one_subslot(self, db, student, professor, course, enrolled):
+        """Test that booking one 15-min sub-slot leaves other sub-slots free."""
+        from datetime import time
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week="wednesday",
+            time_from=time(10, 0),
+            time_to=time(11, 0),
+            window_type=WindowType.regular,
+            slot_duration_minutes=15,
+        )
+        db.add(window)
+        await db.flush()
+        
+        # Get free slots
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=course.id,
+            ctype=ConsultationType.general,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=2,
+        )
+        
+        # Find the first Wednesday's slots
+        wednesday_slots = [s for s in slots if s.session_date.weekday() == 2]
+        first_wednesday = wednesday_slots[0].session_date if wednesday_slots else None
+        assert first_wednesday is not None
+        
+        first_wednesday_slots = [s for s in wednesday_slots if s.session_date == first_wednesday]
+        assert len(first_wednesday_slots) == 4  # 1 hour = 4 x 15-min
+        
+        # Book the first sub-slot
+        first_slot = first_wednesday_slots[0]
+        booking = Booking(
+            student_id=student.id,
+            session_id=first_slot.id,
+            group_size=1,
+            status=BookingStatus.active,
+        )
+        db.add(booking)
+        await db.flush()
+        
+        # Get free slots again
+        slots_after = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=course.id,
+            ctype=ConsultationType.general,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=2,
+        )
+        
+        # Filter for the same Wednesday and time range
+        wednesday_slots_after = [
+            s for s in slots_after 
+            if s.session_date == first_wednesday 
+            and s.time_from >= time(10, 0) 
+            and s.time_to <= time(11, 0)
+        ]
+        
+        # Should have 3 free slots remaining
+        assert len(wednesday_slots_after) == 3
+        # First slot should not be in the list
+        assert first_slot.id not in [s.id for s in wednesday_slots_after]
+
+    async def test_blocked_date_skips_all_subslots(self, db, student, professor, course, enrolled):
+        """Test that blocked dates exclude all sub-slots for that date."""
+        from datetime import time
+        
+        today = date.today()
+        days_ahead = 3 - today.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        next_thursday = today + timedelta(days=days_ahead)
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week="thursday",
+            time_from=time(9, 0),
+            time_to=time(12, 0),
+            window_type=WindowType.regular,
+            slot_duration_minutes=15,
+        )
+        db.add(window)
+        
+        # Block next Thursday
+        blocked = BlockedDate(
+            professor_id=professor.id,
+            blocked_date=next_thursday,
+            reason="Conference",
+        )
+        db.add(blocked)
+        await db.flush()
+        
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=course.id,
+            ctype=ConsultationType.general,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=2,
+        )
+        
+        # Should have no slots for next Thursday
+        thursday_slots = [s for s in slots if s.session_date == next_thursday]
+        assert len(thursday_slots) == 0
+
+    async def test_general_exam_period_returns_empty(self, db, student, professor, course, enrolled):
+        """Test that GENERAL during exam period returns empty list (existing behavior)."""
+        from datetime import time
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week="friday",
+            time_from=time(10, 0),
+            time_to=time(12, 0),
+            window_type=WindowType.regular,
+            slot_duration_minutes=15,
+        )
+        db.add(window)
+        
+        # Create exam period covering next 2 weeks
+        today = date.today()
+        exam = ExamPeriod(
+            date_from=today,
+            date_to=today + timedelta(weeks=2),
+            name="Winter exam period",
+        )
+        db.add(exam)
+        await db.flush()
+        
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=course.id,
+            ctype=ConsultationType.general,
+            group_size=1,
+            student_id=student.id,
+            next_weeks=2,
+        )
+        
+        assert slots == []
+
+    async def test_thesis_subslot_requires_active_application(self, db, student, professor, course, enrolled):
+        """Test that thesis sub-slot generation requires active ThesisApplication."""
+        from datetime import time
+        
+        window = ConsultationWindow(
+            professor_id=professor.id,
+            day_of_week="monday",
+            time_from=time(14, 0),
+            time_to=time(16, 0),
+            window_type=WindowType.thesis,
+            slot_duration_minutes=60,
+        )
+        db.add(window)
+        await db.flush()
+        
+        # Try to get slots without an active thesis application
+        with pytest.raises(ValueError, match="No active thesis supervision"):
+            await slot_service.get_free_slots(
+                db,
+                professor_id=professor.id,
+                course_id=None,
+                ctype=ConsultationType.thesis,
+                group_size=1,
+                student_id=student.id,
+                next_weeks=2,
+            )

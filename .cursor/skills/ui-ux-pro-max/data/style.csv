@@ -1,0 +1,10 @@
+name,keywords,effects,anti_patterns
+Glassmorphism,"glass,blur,frosted,translucent",Backdrop blur + translucent panels + subtle border,Low contrast text on busy photos
+Minimalism,"minimal,clean,swiss,sparse",Generous whitespace; limited palette; crisp type,Confusing affordances from oversimplification
+Brutalism,"brutal,raw,mono,sharp",Hard edges; high contrast; monospace accents,Illegible novelty type at small sizes
+Neumorphism,"neu,soft ui,emboss",Soft dual shadows; low contrast surfaces,WCAG failures; muddy toggles
+Claymorphism,"clay,3d,cute,soft shape",Rounded inflated shapes; soft lighting,Infantile tone for enterprise trust
+Bento grid,"bento,dashboard tiles",Card mosaic; varied tile sizes,Unreadable micro-widgets
+Dark mode,"dark,night,oled",Desaturated surfaces; elevated contrast for text,Pure #000 with pure white text fatigue
+Flat design,"flat,material,system",Clear layers without heavy skeuomorphism,Flat buttons with no pressed state
+Skeuomorphism,"skeuo,realistic,texture",Realistic cues for specific domains (music/dj),Heavy textures slowing comprehension

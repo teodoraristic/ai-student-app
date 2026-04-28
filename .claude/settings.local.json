@@ -5,7 +5,15 @@
       "Bash(python -c \"import ast, sys; files = ['backend/services/chat_service.py', 'backend/services/slot_service.py', 'backend/services/booking_service.py', 'backend/workers/tasks.py']; [print\\(f'OK: {f}'\\) if ast.parse\\(open\\(f\\).read\\(\\)\\) else None for f in files]\")",
       "Bash(python -c ' *)",
       "Bash(pip install *)",
-      "Bash(python -m pytest backend/tests/ -v)"
+      "Bash(python -m pytest backend/tests/ -v)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(pkill -f \"uvicorn backend\")",
+      "Bash(pkill -f \"vite\")",
+      "Bash(python -m pytest backend/tests/test_chat_service.py::TestThesisBugFix -xvs)",
+      "Bash(python -m pytest backend/tests/test_chat_service.py::TestThesisBugFix::test_thesis_supervision_not_allowed_through_chatbot -xvs)",
+      "Bash(python -m pytest backend/tests/test_chat_service.py::TestThesisBugFix::test_thesis_consultation_allowed_for_active_thesis -xvs)",
+      "Bash(python -m pytest backend/tests/test_chat_service.py -v)"
     ]
   }
 }

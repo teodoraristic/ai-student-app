@@ -10,6 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from backend.alembic_migration_utils import has_column, has_fk
+
 revision: str = "003"
 down_revision: Union[str, None] = "002"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -17,14 +19,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("users", sa.Column("thesis_professor_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_users_thesis_professor_id_users",
-        "users",
-        "users",
-        ["thesis_professor_id"],
-        ["id"],
-    )
+    bind = op.get_bind()
+    if not has_column(bind, "users", "thesis_professor_id"):
+        op.add_column("users", sa.Column("thesis_professor_id", sa.Integer(), nullable=True))
+    if not has_fk(bind, "users", "fk_users_thesis_professor_id_users"):
+        op.create_foreign_key(
+            "fk_users_thesis_professor_id_users",
+            "users",
+            "users",
+            ["thesis_professor_id"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:

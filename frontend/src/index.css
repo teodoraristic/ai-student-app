@@ -3,9 +3,53 @@
 body {
   margin: 0;
   min-height: 100dvh;
+  font-family: 'Segoe UI', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 #root {
   min-height: 100dvh;
+}
+
+/* Admin shell: calm surfaces + single accent (scoped to .admin-app) */
+@keyframes admin-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-app .admin-stagger > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+.admin-app .admin-stagger > * {
+  animation: admin-enter 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.admin-app .admin-stagger > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.admin-app .admin-stagger > *:nth-child(2) {
+  animation-delay: 45ms;
+}
+.admin-app .admin-stagger > *:nth-child(3) {
+  animation-delay: 90ms;
+}
+.admin-app .admin-stagger > *:nth-child(4) {
+  animation-delay: 135ms;
+}
+.admin-app .admin-stagger > *:nth-child(5) {
+  animation-delay: 180ms;
+}
+.admin-app .admin-stagger > *:nth-child(6) {
+  animation-delay: 225ms;
 }

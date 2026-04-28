@@ -10,4 +10,6 @@ export type AuthUser = {
   consent_accepted_at: string | null
   /** Students only; used for thesis-related UI. */
   is_final_year: boolean
+  /** Students only; 1–6 when set by admin. */
+  study_year?: number | null
 }

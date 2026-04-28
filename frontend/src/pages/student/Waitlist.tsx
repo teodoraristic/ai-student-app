@@ -39,7 +39,7 @@ export default function Waitlist() {
           Track your position and leave when you no longer need the slot.
         </p>
         <p style={{ fontSize: '0.78rem', color: '#6b7ea8', margin: '0.5rem 0 0 0', lineHeight: 1.45 }}>
-          Thesis consultations do not offer a waitlist in this system — use the Thesis page or booking chat for supervision and slots.
+          Day-based waitlists cover general and thesis when no bookable time is available yet; session waitlists apply when a specific time is full.
         </p>
       </div>
 
@@ -77,7 +77,7 @@ export default function Waitlist() {
         }}
         >
           <p style={{ margin: '0 0 0.65rem 0' }}>You are not on any waitlists.</p>
-          <p style={{ margin: '0 0 0.65rem 0' }}>Join from a full slot in My Bookings or while booking in chat.</p>
+          <p style={{ margin: '0 0 0.65rem 0' }}>Join from a full slot or a fully booked day in the booking chat.</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
             <Link
               to="/student/bookings"
@@ -116,7 +116,10 @@ export default function Waitlist() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {rows.map((w) => {
-          const timeRange = formatTimeRange(w.time_from, w.time_to)
+          const isDay = w.kind === 'day' || w.session_id == null
+          const timeRange = isDay && w.any_slot_on_day
+            ? 'Any slot that day'
+            : formatTimeRange(w.time_from, w.time_to)
           return (
             <div key={w.id} style={{
               background: '#fff',
@@ -150,7 +153,7 @@ export default function Waitlist() {
                     {timeRange ? ` · ${timeRange}` : ''}
                   </p>
                   <p style={{ fontSize: '0.78rem', color: '#8fa3c4', margin: '0.2rem 0 0 0' }}>
-                    Preferred session day: {formatPreferred(w.preferred_date)}
+                    {isDay ? 'Preferred day' : 'Preferred session day'}: {formatPreferred(w.preferred_date)}
                   </p>
                   {w.professor_name && (
                     <p style={{ fontSize: '0.8rem', color: '#6b7ea8', margin: '0.15rem 0 0 0' }}>

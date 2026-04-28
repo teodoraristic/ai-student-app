@@ -10,6 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from backend.alembic_migration_utils import has_column
+
 revision: str = "004"
 down_revision: Union[str, None] = "003"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -17,7 +19,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("professor_profiles", sa.Column("hall", sa.String(length=255), nullable=False, server_default=""))
+    bind = op.get_bind()
+    if not has_column(bind, "professor_profiles", "hall"):
+        op.add_column("professor_profiles", sa.Column("hall", sa.String(length=255), nullable=False, server_default=""))
 
 
 def downgrade() -> None:

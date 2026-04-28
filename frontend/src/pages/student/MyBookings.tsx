@@ -1,9 +1,9 @@
 import type { CSSProperties } from 'react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import { FeedbackModal } from '../../components/FeedbackModal'
-import { useMyBookings } from '../../hooks/useMyBookings'
+import { useMyBookings, type MyBookingRow } from '../../hooks/useMyBookings'
 
 type Tab = 'upcoming' | 'past'
 
@@ -40,7 +40,7 @@ function pastOutcomeChip(status: string): { label: string; bg: string; color: st
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-GB', {
-    weekday: 'short', day: 'numeric', month: 'long',
+    weekday: 'short', day: 'numeric', month: 'short',
   })
 }
 
@@ -51,16 +51,42 @@ function subjectLine(r: { course_code: string | null; course_name: string | null
   return null
 }
 
+/** Upcoming only, and only when at least two people are signed up (shared general slot). */
+function generalGroupLine(r: MyBookingRow, tab: Tab): string | null {
+  if (tab !== 'upcoming') return null
+  const n = r.general_group_attendees
+  const cap = r.general_group_capacity
+  if (n == null || cap == null || r.consultation_type !== 'GENERAL' || n < 2) return null
+  return `${n} people signed up · up to ${cap} for this slot`
+}
+
 function topicLine(r: { task: string | null; anonymous_question: string | null }): string | null {
   const t = (r.task ?? '').trim()
   const q = (r.anonymous_question ?? '').trim()
   if (t && q) {
-    const qq = q.length > 140 ? `${q.slice(0, 140)}…` : q
+    const qq = q.length > 80 ? `${q.slice(0, 80)}…` : q
     return `${t} — ${qq}`
   }
-  if (t) return t.length > 240 ? `${t.slice(0, 240)}…` : t
-  if (q) return q.length > 240 ? `${q.slice(0, 240)}…` : q
+  if (t) return t.length > 120 ? `${t.slice(0, 120)}…` : t
+  if (q) return q.length > 120 ? `${q.slice(0, 120)}…` : q
   return null
+}
+
+/** Upcoming: soonest session first. Past: most recent first. Null dates sort last / first respectively. */
+function compareBookingsBySession(a: MyBookingRow, b: MyBookingRow, order: 'asc' | 'desc'): number {
+  const hasA = Boolean(a.session_date)
+  const hasB = Boolean(b.session_date)
+  if (!hasA && !hasB) {
+    const t = (a.time_from ?? '').localeCompare(b.time_from ?? '')
+    return order === 'asc' ? t : -t
+  }
+  if (!hasA) return 1
+  if (!hasB) return -1
+  const cmpDate = new Date(a.session_date!).getTime() - new Date(b.session_date!).getTime()
+  if (cmpDate !== 0) return order === 'asc' ? cmpDate : -cmpDate
+  const cmpTime = (a.time_from ?? '').localeCompare(b.time_from ?? '')
+  if (cmpTime !== 0) return order === 'asc' ? cmpTime : -cmpTime
+  return a.id - b.id
 }
 
 export default function MyBookings() {
@@ -69,25 +95,49 @@ export default function MyBookings() {
   const [feedbackId, setFeedbackId] = useState<number | null>(null)
   const [actionErr, setActionErr] = useState<string | null>(null)
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  const { upcoming, past } = useMemo(() => {
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const up = rows.filter(
+      (r) => r.status === 'ACTIVE' && (!r.session_date || new Date(r.session_date) >= todayStart),
+    )
+    const pa = rows.filter((r) => {
+      if (r.status === 'CANCELLED') return false
+      return r.status !== 'ACTIVE' || (r.session_date != null && new Date(r.session_date) < todayStart)
+    })
+    return {
+      upcoming: [...up].sort((a, b) => compareBookingsBySession(a, b, 'asc')),
+      past: [...pa].sort((a, b) => compareBookingsBySession(a, b, 'desc')),
+    }
+  }, [rows])
 
-  const upcoming = rows.filter(
-    (r) => r.status === 'ACTIVE' && (!r.session_date || new Date(r.session_date) >= today),
-  )
-  const past = rows.filter((r) => {
-    if (r.status === 'CANCELLED') return false
-    return r.status !== 'ACTIVE' || (r.session_date != null && new Date(r.session_date) < today)
-  })
   const displayed = tab === 'upcoming' ? upcoming : past
 
   return (
     <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
-      <div style={{ marginBottom: '1.25rem' }}>
-        <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#0f1f3d', margin: 0 }}>My Bookings</h1>
-        <p style={{ fontSize: '0.875rem', color: '#8fa3c4', margin: '0.2rem 0 0 0' }}>
-          All your consultations in one place.
-        </p>
+      <div style={{ marginBottom: '1.25rem', display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+        <div>
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#0f1f3d', margin: 0 }}>My Bookings</h1>
+          <p style={{ fontSize: '0.875rem', color: '#8fa3c4', margin: '0.2rem 0 0 0' }}>
+            All your consultations in one place.
+          </p>
+        </div>
+        <Link
+          to="/student/calendar?layers=bookings"
+          style={{
+            display: 'inline-block',
+            padding: '0.45rem 0.95rem',
+            borderRadius: 8,
+            border: '1px solid #d1d9e6',
+            background: '#fff',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+            color: '#3b5bdb',
+            textDecoration: 'none',
+          }}
+        >
+          Calendar view
+        </Link>
       </div>
 
       <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1.25rem' }}>
@@ -157,7 +207,13 @@ export default function MyBookings() {
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: '1rem',
+        }}
+      >
         {displayed.map((r) => {
           const typeStyle = r.consultation_type
             ? (TYPE_COLOR[r.consultation_type] ?? { bg: '#f1f3f6', color: '#4d6080' })
@@ -165,109 +221,117 @@ export default function MyBookings() {
 
           const subj = subjectLine(r)
           const topic = topicLine(r)
+          const groupInfo = generalGroupLine(r, tab)
           const outcome = tab === 'past' ? pastOutcomeChip(r.status) : null
 
           return (
-            <div key={r.id} style={{
-              background: '#fff',
-              border: '1px solid #e8ecf0',
-              borderRadius: 12,
-              padding: '1rem 1.2rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.65rem',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <p style={{ fontWeight: 600, fontSize: '0.95rem', color: '#0f1f3d', margin: 0, lineHeight: 1.35 }}>
-                    {r.professor_name ?? 'Unassigned'}
-                  </p>
-                  {subj ? (
-                    <div style={{ marginTop: '0.45rem' }}>
-                      <p style={metaLabel}>Subject</p>
-                      <p style={{ fontSize: '0.84rem', color: '#3d4f66', margin: 0, fontWeight: 500 }}>{subj}</p>
-                    </div>
-                  ) : null}
-                  {r.hall ? (
-                    <div style={{ marginTop: '0.45rem' }}>
-                      <p style={metaLabel}>Hall</p>
-                      <p style={{ fontSize: '0.84rem', color: '#4d6080', margin: 0 }}>{r.hall}</p>
-                    </div>
-                  ) : null}
-                  {topic ? (
-                    <div style={{
-                      marginTop: '0.5rem',
-                      background: '#f8f9fb',
-                      border: '1px solid #eaecf0',
-                      borderRadius: 8,
-                      padding: '0.55rem 0.7rem',
-                    }}
-                    >
-                      <p style={metaLabel}>Topic / question</p>
-                      <p style={{ fontSize: '0.82rem', color: '#4d6080', margin: 0, lineHeight: 1.45 }}>{topic}</p>
-                    </div>
-                  ) : null}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.35rem', flexShrink: 0 }}>
-                  {r.is_urgent && (
-                    <span style={{ fontSize: '0.72rem', fontWeight: 500, padding: '0.2rem 0.6rem', borderRadius: 20, background: '#ffe8e8', color: '#c0392b' }}>
-                      Urgent
-                    </span>
-                  )}
-                  {outcome && (
-                    <span style={{ fontSize: '0.72rem', fontWeight: 500, padding: '0.2rem 0.6rem', borderRadius: 20, background: outcome.bg, color: outcome.color }}>
-                      {outcome.label}
-                    </span>
-                  )}
-                  {typeStyle && r.consultation_type && (
-                    <span style={{ fontSize: '0.72rem', fontWeight: 500, padding: '0.2rem 0.6rem', borderRadius: 20, background: typeStyle.bg, color: typeStyle.color }}>
-                      {TYPE_LABEL[r.consultation_type] ?? r.consultation_type}
-                    </span>
-                  )}
-                </div>
+            <div
+              key={r.id}
+              style={{
+                background: '#fff',
+                border: '1px solid #e8ecf0',
+                borderRadius: 12,
+                padding: '0.85rem 1rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                minWidth: 0,
+              }}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.35rem' }}>
+                {typeStyle && r.consultation_type ? (
+                  <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.15rem 0.45rem', borderRadius: 20, background: typeStyle.bg, color: typeStyle.color }}>
+                    {TYPE_LABEL[r.consultation_type] ?? r.consultation_type}
+                  </span>
+                ) : null}
+                {outcome ? (
+                  <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.15rem 0.45rem', borderRadius: 20, background: outcome.bg, color: outcome.color }}>
+                    {outcome.label}
+                  </span>
+                ) : null}
               </div>
 
-              <div style={{
-                borderTop: '1px solid #f0f2f5',
-                paddingTop: '0.65rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-              }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', flexWrap: 'wrap' }}>
-                  {r.session_date && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.83rem', color: '#4d6080' }}>
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
+              <p style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f1f3d', margin: 0, lineHeight: 1.3 }}>
+                {r.professor_name ?? 'Unassigned'}
+              </p>
+
+              {subj ? (
+                <div>
+                  <p style={{ ...metaLabel, margin: '0 0 0.2rem 0' }}>Subject</p>
+                  <p style={{ fontSize: '0.78rem', color: '#3d4f66', margin: 0, fontWeight: 500, lineHeight: 1.35 }}>{subj}</p>
+                </div>
+              ) : null}
+
+              {r.hall ? (
+                <div>
+                  <p style={{ ...metaLabel, margin: '0 0 0.2rem 0' }}>Hall</p>
+                  <p style={{ fontSize: '0.76rem', color: '#4d6080', margin: 0 }}>{r.hall}</p>
+                </div>
+              ) : null}
+
+              {topic ? (
+                <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.45rem 0.55rem' }}>
+                  <p style={{ ...metaLabel, margin: '0 0 0.2rem 0' }}>Topic</p>
+                  <p
+                    style={{
+                      fontSize: '0.74rem',
+                      color: '#4d6080',
+                      margin: 0,
+                      lineHeight: 1.4,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                    }}
+                  >
+                    {topic}
+                  </p>
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 'auto', paddingTop: '0.35rem', borderTop: '1px solid #f0f2f5', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem 0.75rem', fontSize: '0.76rem', color: '#4d6080' }}>
+                  {r.session_date ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
                         <path d="M19 3h-1V1h-2v2H8V1H6v2H5C3.89 3 3 3.9 3 5v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z" />
                       </svg>
                       {formatDate(r.session_date)}
                     </span>
-                  )}
-                  {r.time_from && (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.83rem', color: '#4d6080' }}>
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
+                  ) : null}
+                  {r.time_from ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
                         <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z" />
                       </svg>
                       {r.time_from.slice(0, 5)}
-                      {r.time_to ? ` – ${r.time_to.slice(0, 5)}` : ''}
+                      {r.time_to ? `–${r.time_to.slice(0, 5)}` : ''}
                     </span>
-                  )}
+                  ) : null}
                 </div>
+
+                {groupInfo ? (
+                  <p style={{ fontSize: '0.72rem', color: '#8fa3c4', margin: 0, lineHeight: 1.35 }}>
+                    {groupInfo}
+                  </p>
+                ) : null}
 
                 {tab === 'upcoming' && r.status === 'ACTIVE' ? (
                   <button
                     type="button"
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '0.3rem',
-                      padding: '0.35rem 0.75rem',
+                      width: '100%',
+                      justifyContent: 'center',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      padding: '0.32rem 0.5rem',
                       border: '1px solid #ffc9c9',
                       borderRadius: 6,
                       background: '#fff5f5',
-                      fontSize: '0.8rem',
-                      fontWeight: 500,
+                      fontSize: '0.74rem',
+                      fontWeight: 600,
                       color: '#c0392b',
                       cursor: 'pointer',
                     }}
@@ -283,7 +347,7 @@ export default function MyBookings() {
                       }
                     }}
                   >
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
                       <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
                     </svg>
                     Cancel
@@ -292,41 +356,45 @@ export default function MyBookings() {
                   <button
                     type="button"
                     style={{
-                      display: 'flex', alignItems: 'center', gap: '0.3rem',
-                      padding: '0.35rem 0.75rem',
+                      width: '100%',
+                      justifyContent: 'center',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      padding: '0.32rem 0.5rem',
                       border: '1px solid #d1d9e6',
                       borderRadius: 6,
                       background: '#fff',
-                      fontSize: '0.8rem',
-                      fontWeight: 500,
-                      color: '#4d6080',
+                      fontSize: '0.74rem',
+                      fontWeight: 600,
+                      color: '#1a2744',
                       cursor: 'pointer',
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = '#f5f7fa')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = '#fff')}
                     onClick={() => setFeedbackId(r.id)}
                   >
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
                       <path d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zm-10 6.39l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.28 4.38.38-3.32 2.88 1 4.28L12 15.63z" />
                     </svg>
-                    Leave feedback
+                    Feedback
                   </button>
                 ) : tab === 'past' && r.status === 'ATTENDED' && r.has_feedback ? (
                   <span
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '0.3rem',
-                      padding: '0.35rem 0.75rem',
+                      justifyContent: 'center',
+                      padding: '0.32rem 0.5rem',
                       border: '1px solid #d7f0df',
                       borderRadius: 6,
                       background: '#f0faf4',
-                      fontSize: '0.8rem',
-                      fontWeight: 500,
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
                       color: '#1a7a4a',
                     }}
                   >
-                    Feedback submitted
+                    Feedback sent
                   </span>
                 ) : null}
               </div>

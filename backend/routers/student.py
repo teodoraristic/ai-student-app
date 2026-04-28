@@ -1,7 +1,7 @@
 """Student-facing endpoints."""
 
-from datetime import UTC, datetime, time
-from typing import Optional
+from datetime import UTC, date, datetime, time
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.base import get_db
 from backend.db.models import (
+    AcademicEvent,
     Announcement,
     Booking,
     BookingStatus,
@@ -31,7 +32,7 @@ from backend.db.models import (
     WindowType,
 )
 from backend.middleware.auth_middleware import require_role
-from backend.services import booking_service, slot_service, thesis_service
+from backend.services import booking_service, exam_service, slot_service, thesis_service, waitlist_service
 
 router = APIRouter(prefix="", tags=["student"])
 
@@ -172,7 +173,6 @@ class BookingCreate(BaseModel):
     session_id: int
     task: Optional[str] = None
     anonymous_question: Optional[str] = None
-    is_urgent: bool = False
 
 
 class ThesisApplyBody(BaseModel):
@@ -199,6 +199,46 @@ async def my_courses(
     q = select(Course).join(CourseStudent).where(CourseStudent.student_id == user.id)
     rows = list((await db.scalars(q)).all())
     return [{"id": c.id, "name": c.name, "code": c.code} for c in rows]
+
+
+@router.get("/courses/with-professors")
+async def my_courses_with_professors(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    """Enrolled courses, each with the professor(s) assigned to that course."""
+    q = (
+        select(Course, User)
+        .join(CourseStudent, CourseStudent.course_id == Course.id)
+        .join(CourseProfessor, CourseProfessor.course_id == Course.id)
+        .join(User, User.id == CourseProfessor.professor_id)
+        .where(
+            CourseStudent.student_id == user.id,
+            User.role == UserRole.professor,
+            User.is_active.is_(True),
+        )
+    )
+    rows = list((await db.execute(q)).unique().all())
+    by_cid: dict[int, dict[str, Any]] = {}
+    for course, prof in rows:
+        bucket = by_cid.setdefault(
+            course.id,
+            {
+                "id": course.id,
+                "name": course.name,
+                "code": course.code,
+                "professors": [],
+            },
+        )
+        plist: list[dict[str, Any]] = bucket["professors"]
+        pname = f"{prof.first_name} {prof.last_name}"
+        if not any(p["id"] == prof.id for p in plist):
+            plist.append({"id": prof.id, "name": pname})
+    out = list(by_cid.values())
+    out.sort(key=lambda x: (x["code"] or "").lower())
+    for item in out:
+        item["professors"].sort(key=lambda p: p["name"].lower())
+    return out
 
 
 @router.get("/sessions/available")
@@ -246,7 +286,6 @@ async def create_booking(
             session_id=body.session_id,
             task=body.task,
             anonymous_question=body.anonymous_question,
-            is_urgent=body.is_urgent,
             group_size=1,
         )
         await db.commit()
@@ -269,20 +308,6 @@ async def delete_booking(
     return {"ok": True}
 
 
-@router.post("/bookings/{booking_id}/urgent")
-async def urgent_booking(
-    booking_id: int,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_role(UserRole.student)),
-):
-    try:
-        await booking_service.flag_urgent(db, user, booking_id)
-        await db.commit()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"ok": True}
-
-
 @router.get("/bookings/mine")
 async def my_bookings(
     db: AsyncSession = Depends(get_db),
@@ -291,7 +316,14 @@ async def my_bookings(
     rows = list(
         (
             await db.scalars(
-                select(Booking).where(Booking.student_id == user.id).order_by(Booking.created_at.desc())
+                select(Booking)
+                .join(ConsultationSession, ConsultationSession.id == Booking.session_id)
+                .where(Booking.student_id == user.id)
+                .order_by(
+                    ConsultationSession.session_date.desc(),
+                    ConsultationSession.time_from.desc(),
+                    Booking.id.desc(),
+                )
             )
         ).all()
     )
@@ -311,13 +343,15 @@ async def my_bookings(
         has_feedback = (
             await db.scalar(select(Feedback.id).where(Feedback.booking_id == b.id).limit(1))
         ) is not None
+        general_group_attendees, general_group_capacity = await booking_service.general_group_session_counts(
+            db, cs
+        )
         result.append(
             {
                 "id": b.id,
                 "session_id": b.session_id,
                 "status": b.status.value,
                 "priority": b.priority.value,
-                "is_urgent": b.is_urgent,
                 "session_date": cs.session_date.isoformat() if cs else None,
                 "time_from": cs.time_from.strftime("%H:%M") if cs else None,
                 "time_to": cs.time_to.strftime("%H:%M") if cs else None,
@@ -329,9 +363,24 @@ async def my_bookings(
                 "task": b.task,
                 "anonymous_question": b.anonymous_question,
                 "has_feedback": has_feedback,
+                "general_group_attendees": general_group_attendees,
+                "general_group_capacity": general_group_capacity,
             }
         )
     return result
+
+
+@router.get("/bookings/calendar")
+async def bookings_calendar(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    try:
+        return await booking_service.list_calendar_bookings(db, user, year=year, month=month)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/thesis/professors")
@@ -535,6 +584,15 @@ async def thesis_my(
     }
 
 
+@router.get("/thesis/consultation-history")
+async def thesis_consultation_history(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    """Thesis-type bookings with the approved mentor (empty if no active supervision)."""
+    return await thesis_service.list_thesis_consultation_history(db, user)
+
+
 @router.get("/thesis/slots/{professor_id}")
 async def thesis_slots(
     professor_id: int,
@@ -613,22 +671,77 @@ async def preparation_sessions(
             ).order_by(ConsultationSession.session_date, ConsultationSession.time_from)
         )).all()
     )
-    result = []
+    allowed_event_ids = await exam_service.student_academic_event_ids_for_preparation_panel(db, user.id)
+    sessions = [s for s in sessions if s.event_id is None or s.event_id in allowed_event_ids]
+
+    ev_ids = [int(s.event_id) for s in sessions if s.event_id is not None]
+    ev_map: dict[int, AcademicEvent] = {}
+    if ev_ids:
+        ev_rows = (await db.scalars(select(AcademicEvent).where(AcademicEvent.id.in_(ev_ids)))).all()
+        ev_map = {e.id: e for e in ev_rows}
+
+    c_ids = list({int(s.course_id) for s in sessions if s.course_id is not None})
+    course_map: dict[int, Course] = {}
+    if c_ids:
+        for c in (await db.scalars(select(Course).where(Course.id.in_(c_ids)))).all():
+            course_map[c.id] = c
+
+    prof_ids = list({int(s.professor_id) for s in sessions})
+    prof_map: dict[int, User] = {}
+    if prof_ids:
+        for u in (await db.scalars(select(User).where(User.id.in_(prof_ids)))).all():
+            prof_map[u.id] = u
+
+    sid_list = [int(s.id) for s in sessions]
+    booked_sids: set[int] = set()
+    if sid_list:
+        booked_rows = (
+            await db.scalars(
+                select(Booking.session_id).where(
+                    Booking.student_id == user.id,
+                    Booking.session_id.in_(sid_list),
+                    Booking.status == BookingStatus.active,
+                )
+            )
+        ).all()
+        booked_sids = {int(r) for r in booked_rows}
+
+    result: list[dict[str, Any]] = []
     for s in sessions:
-        prof = await db.get(User, s.professor_id)
-        result.append({
-            "id": s.id,
-            "date": s.session_date.isoformat(),
-            "time_from": s.time_from.isoformat(),
-            "time_to": s.time_to.isoformat(),
-            "professor_name": f"{prof.first_name} {prof.last_name}" if prof else "",
-            "course_id": s.course_id,
-        })
+        prof = prof_map.get(int(s.professor_id))
+        c = course_map.get(int(s.course_id)) if s.course_id is not None else None
+        ev = ev_map.get(int(s.event_id)) if s.event_id is not None else None
+        result.append(
+            {
+                "id": s.id,
+                "professor_id": s.professor_id,
+                "date": s.session_date.isoformat(),
+                "time_from": s.time_from.isoformat(),
+                "time_to": s.time_to.isoformat(),
+                "professor_name": f"{prof.first_name} {prof.last_name}" if prof else "",
+                "course_id": s.course_id,
+                "course_code": c.code if c else None,
+                "course_name": c.name if c else None,
+                "academic_event_id": s.event_id,
+                "event_type": ev.event_type.value if ev else None,
+                "event_name": ev.name if ev else None,
+                "event_date": ev.event_date.isoformat() if ev else None,
+                "already_booked": int(s.id) in booked_sids,
+            }
+        )
     return result
 
 
 class WaitlistJoin(BaseModel):
     session_id: int
+
+
+class WaitlistDayJoinIn(BaseModel):
+    professor_id: int
+    course_id: Optional[int] = None
+    consultation_type: ConsultationType
+    preferred_date: date
+    any_slot_on_day: bool = True
 
 
 @router.post("/waitlist")
@@ -637,32 +750,44 @@ async def waitlist_join(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.student)),
 ):
-    from sqlalchemy import func as sqlfunc
-    cs = await db.get(ConsultationSession, body.session_id)
-    if not cs:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if cs.consultation_type == ConsultationType.thesis:
-        raise HTTPException(status_code=400, detail="Thesis consultations do not have a waitlist")
-    existing = await db.scalar(
-        select(Waitlist).where(Waitlist.session_id == body.session_id, Waitlist.student_id == user.id)
-    )
-    if existing:
-        raise HTTPException(status_code=400, detail="Already on waitlist for this session")
-    count = await db.scalar(
-        select(sqlfunc.count()).select_from(Waitlist).where(Waitlist.session_id == body.session_id)
-    )
-    w = Waitlist(
-        student_id=user.id,
-        professor_id=cs.professor_id,
-        session_id=body.session_id,
-        preferred_date=cs.session_date,
-        consultation_type=cs.consultation_type,
-        course_id=cs.course_id,
-        position_hint=int(count or 0) + 1,
-    )
-    db.add(w)
+    try:
+        _msg, pos = await waitlist_service.add_session_waitlist(
+            db, student_id=user.id, session_id=body.session_id
+        )
+    except ValueError as e:
+        detail = str(e)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from e
+        raise HTTPException(status_code=400, detail=detail) from e
     await db.commit()
-    return {"ok": True, "position": w.position_hint}
+    return {"ok": True, "position": pos}
+
+
+@router.post("/waitlist/day")
+async def waitlist_day_join(
+    body: WaitlistDayJoinIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    if body.consultation_type not in (ConsultationType.general, ConsultationType.thesis):
+        raise HTTPException(
+            status_code=400,
+            detail="Day waitlist is only available for general or thesis consultations",
+        )
+    try:
+        _msg, pos = await waitlist_service.add_day_waitlist(
+            db,
+            student_id=user.id,
+            professor_id=body.professor_id,
+            course_id=body.course_id,
+            consultation_type=body.consultation_type,
+            preferred_date=body.preferred_date,
+            any_slot_on_day=body.any_slot_on_day,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    await db.commit()
+    return {"ok": True, "position": pos}
 
 
 @router.get("/waitlist/mine")
@@ -678,6 +803,8 @@ async def waitlist_mine(
         result.append({
             "id": w.id,
             "session_id": w.session_id,
+            "kind": "session" if w.session_id else "day",
+            "any_slot_on_day": w.any_slot_on_day,
             "professor_name": f"{prof.first_name} {prof.last_name}" if prof else "",
             "preferred_date": w.preferred_date.isoformat(),
             "time_from": cs.time_from.isoformat() if cs else None,
@@ -763,3 +890,67 @@ async def create_appeal(
         )
     await db.commit()
     return {"ok": True}
+
+
+# --- Exams ---
+
+
+@router.get("/exams/eligible")
+async def student_exams_eligible(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    return await exam_service.list_student_eligible_exams(db, user.id)
+
+
+@router.get("/exams/registrations")
+async def student_exams_registrations(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    return await exam_service.list_student_registrations(db, user.id)
+
+
+class ExamRegisterBody(BaseModel):
+    academic_event_id: int
+
+
+@router.post("/exams/registrations")
+async def student_exams_register(
+    body: ExamRegisterBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    try:
+        reg = await exam_service.register_for_exam(db, user.id, body.academic_event_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"id": reg.id, "status": reg.status.value}
+
+
+@router.delete("/exams/registrations/{registration_id}")
+async def student_exams_cancel_registration(
+    registration_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    try:
+        await exam_service.cancel_registration(db, user.id, registration_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
+
+
+@router.get("/exams/calendar")
+async def student_exams_calendar(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.student)),
+):
+    try:
+        return await exam_service.list_student_exams_calendar(db, user.id, year=year, month=month)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e

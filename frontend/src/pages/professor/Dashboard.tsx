@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import { useState } from 'react'
 import { api } from '../../api/client'
+import { useAuth } from '../../contexts/AuthContext'
 import { useProfessorDashboard, type ExamReminder } from '../../hooks/useProfessorDashboard'
 import * as U from './uiTokens'
 
@@ -15,6 +16,7 @@ function detailMessage(e: unknown, fallback: string): string {
 const labelBlock: CSSProperties = { display: 'block', fontSize: '0.78rem', fontWeight: 500, color: '#4d6080', marginBottom: '0.35rem' }
 
 export default function ProfessorDashboard() {
+  const { user } = useAuth()
   const { data, loading, error, reload } = useProfessorDashboard()
   const [announcingPrep, setAnnouncingPrep] = useState<number | null>(null)
   const [announcingReview, setAnnouncingReview] = useState<number | null>(null)
@@ -73,8 +75,8 @@ export default function ProfessorDashboard() {
     <div style={U.shell}>
       <div style={{ ...U.pageHeader, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
-          <h1 style={U.title}>Home</h1>
-          <p style={U.subtitle}>Exam reminders, preparation sessions, and an overview of your workload.</p>
+          <h1 style={U.titleHome}>Hello, {user?.first_name}</h1>
+          <p style={U.subtitle}>Exam reminders, preparation sessions, and a snapshot of your workload.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexShrink: 0 }}>
           {data != null && (
@@ -97,7 +99,7 @@ export default function ProfessorDashboard() {
         </div>
       </div>
 
-      {loading && <p style={{ fontSize: '0.875rem', color: '#aab8cc', marginBottom: '1rem' }}>Loading dashboard…</p>}
+      {loading && <p style={{ fontSize: '0.87rem', color: '#aab8cc', marginBottom: '1rem' }}>Loading dashboard…</p>}
       {error && (
         <div style={{ ...U.cardMuted, marginBottom: '1rem', borderColor: '#ffc9c9', background: '#fff5f5', color: '#c0392b', fontSize: '0.85rem' }}>
           {error}
@@ -115,8 +117,11 @@ export default function ProfessorDashboard() {
         </div>
       ) : null}
 
-      <section>
-        <h2 style={U.sectionTitle}>Upcoming exam reminders</h2>
+      <section style={U.sectionBlock}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <h2 style={{ ...U.sectionTitle, margin: 0 }}>Upcoming exam reminders</h2>
+          <span style={{ fontSize: '0.75rem', color: '#8fa3c4' }}>Schedule preparation or announce a graded review session</span>
+        </div>
         {reminders.length === 0 && !loading ? (
           <div style={U.emptyState}>
             <p style={{ margin: 0 }}>No upcoming exams in the configured trigger window.</p>

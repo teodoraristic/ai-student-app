@@ -1,5 +1,7 @@
 """Application settings — read only from environment via Pydantic."""
 from functools import lru_cache
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +21,15 @@ class Settings(BaseSettings):
     email_from: str = "noreply@example.com"
     cors_origins: str = "http://localhost:5173"
     app_env: str = "development"
+
+    @model_validator(mode="after")
+    def _production_jwt_secret(self) -> "Settings":
+        if self.app_env.lower() == "production":
+            if not self.jwt_secret or self.jwt_secret == "change-me" or len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "JWT secret must be at least 32 characters and not the default when APP_ENV=production"
+                )
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

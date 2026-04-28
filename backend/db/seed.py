@@ -8,6 +8,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.dates import utc_today
 from backend.db.base import async_session_maker
 from backend.db.models import (
     AcademicEvent,
@@ -24,9 +25,14 @@ from backend.db.models import (
     CourseStudent,
     CourseStudentStatus,
     ExamPeriod,
+    ExamRegistration,
+    ExamRegistrationStatus,
     Feedback,
+    PreparationVote,
     ProfessorAnnouncement,
     ProfessorProfile,
+    SchedulingRequest,
+    SchedulingRequestStatus,
     Semester,
     SessionFormat,
     SessionStatus,
@@ -55,6 +61,7 @@ DEFAULT_CONFIG: list[tuple[str, str, str]] = [
     ("penalty_duration_days", "30", "Duration of low waitlist priority penalty"),
     ("notification_polling_seconds", "60", "Suggested frontend notification poll interval"),
     ("waitlist_confirm_hours", "2", "Hours to confirm waitlist promotion"),
+    ("waitlist_cutoff_hours", "2", "Hours before session start when waitlist auto-promotion stops"),
 ]
 
 
@@ -161,6 +168,7 @@ async def _ensure_course_professor(
         select(CourseProfessor).where(
             CourseProfessor.professor_id == professor.id,
             CourseProfessor.course_id == course.id,
+            CourseProfessor.academic_year == ACADEMIC_YEAR,
         )
     )
     if not row:
@@ -188,6 +196,7 @@ async def _ensure_course_student(
         select(CourseStudent).where(
             CourseStudent.student_id == student.id,
             CourseStudent.course_id == course.id,
+            CourseStudent.academic_year == ACADEMIC_YEAR,
         )
     )
     if not row:
@@ -224,6 +233,7 @@ async def _ensure_window(
             ConsultationWindow.window_type == window_type,
         )
     )
+    slot_mins = 60 if window_type == WindowType.thesis else 15
     if not row:
         row = ConsultationWindow(
             professor_id=professor.id,
@@ -231,6 +241,7 @@ async def _ensure_window(
             time_from=time_from,
             time_to=time_to,
             window_type=window_type,
+            slot_duration_minutes=slot_mins,
             is_active=True,
         )
         session.add(row)
@@ -238,6 +249,7 @@ async def _ensure_window(
         return row
 
     row.is_active = True
+    row.slot_duration_minutes = slot_mins
     return row
 
 
@@ -267,6 +279,49 @@ async def _ensure_announcement(
     return row
 
 
+async def _ensure_professor_announcement(
+    session: AsyncSession,
+    *,
+    professor: User,
+    course: Course,
+    academic_event_id: int | None,
+    announcement_type: str,
+    title: str,
+    message: str,
+    created_at: datetime,
+    expires_at: datetime | None = None,
+) -> ProfessorAnnouncement:
+    """Idempotent per (professor, title) so re-running seed does not duplicate rows."""
+    row = await session.scalar(
+        select(ProfessorAnnouncement).where(
+            ProfessorAnnouncement.professor_id == professor.id,
+            ProfessorAnnouncement.title == title,
+        )
+    )
+    if not row:
+        row = ProfessorAnnouncement(
+            professor_id=professor.id,
+            course_id=course.id,
+            academic_event_id=academic_event_id,
+            announcement_type=announcement_type,
+            title=title,
+            message=message,
+            created_at=created_at,
+            expires_at=expires_at,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    row.course_id = course.id
+    row.academic_event_id = academic_event_id
+    row.announcement_type = announcement_type
+    row.message = message
+    row.created_at = created_at
+    row.expires_at = expires_at
+    return row
+
+
 async def _ensure_event(
     session: AsyncSession,
     *,
@@ -274,6 +329,11 @@ async def _ensure_event(
     event_type: AcademicEventType,
     event_date: date,
     name: str,
+    academic_year: str = ACADEMIC_YEAR,
+    time_from: time | None = None,
+    time_to: time | None = None,
+    hall: str | None = None,
+    exam_period_id: int | None = None,
 ) -> AcademicEvent:
     row = await session.scalar(
         select(AcademicEvent).where(
@@ -287,6 +347,11 @@ async def _ensure_event(
             event_type=event_type,
             event_date=event_date,
             name=name,
+            academic_year=academic_year,
+            time_from=time_from,
+            time_to=time_to,
+            hall=hall,
+            exam_period_id=exam_period_id,
         )
         session.add(row)
         await session.flush()
@@ -294,6 +359,81 @@ async def _ensure_event(
 
     row.event_type = event_type
     row.event_date = event_date
+    row.academic_year = academic_year
+    row.time_from = time_from
+    row.time_to = time_to
+    row.hall = hall
+    row.exam_period_id = exam_period_id
+    return row
+
+
+async def _ensure_preparation_vote(
+    session: AsyncSession,
+    *,
+    student: User,
+    course: Course,
+    event: AcademicEvent,
+    preferred_times: list[str] | None = None,
+) -> PreparationVote:
+    row = await session.scalar(
+        select(PreparationVote).where(
+            PreparationVote.student_id == student.id,
+            PreparationVote.academic_event_id == event.id,
+        )
+    )
+    if not row:
+        row = PreparationVote(
+            student_id=student.id,
+            course_id=course.id,
+            academic_event_id=event.id,
+            preferred_times=preferred_times,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+    row.course_id = course.id
+    row.preferred_times = preferred_times
+    return row
+
+
+async def _ensure_scheduling_request(
+    session: AsyncSession,
+    *,
+    professor: User,
+    course: Course,
+    event: AcademicEvent,
+    vote_count: int,
+    status: SchedulingRequestStatus,
+    deadline_at: datetime,
+    session_id: int | None = None,
+    responded_at: datetime | None = None,
+) -> SchedulingRequest:
+    row = await session.scalar(
+        select(SchedulingRequest).where(
+            SchedulingRequest.professor_id == professor.id,
+            SchedulingRequest.academic_event_id == event.id,
+        )
+    )
+    if not row:
+        row = SchedulingRequest(
+            professor_id=professor.id,
+            course_id=course.id,
+            academic_event_id=event.id,
+            vote_count=vote_count,
+            status=status,
+            deadline_at=deadline_at,
+            session_id=session_id,
+            responded_at=responded_at,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+    row.course_id = course.id
+    row.vote_count = vote_count
+    row.status = status
+    row.deadline_at = deadline_at
+    row.session_id = session_id
+    row.responded_at = responded_at
     return row
 
 
@@ -357,7 +497,6 @@ async def _ensure_booking(
     group_size: int = 1,
     task: str | None = None,
     anonymous_question: str | None = None,
-    is_urgent: bool = False,
     priority: BookingPriority = BookingPriority.normal,
     cancelled_at: datetime | None = None,
     cancellation_reason: str | None = None,
@@ -376,7 +515,6 @@ async def _ensure_booking(
             status=status,
             task=task,
             anonymous_question=anonymous_question,
-            is_urgent=is_urgent,
             priority=priority,
             cancelled_at=cancelled_at,
             cancellation_reason=cancellation_reason,
@@ -389,7 +527,6 @@ async def _ensure_booking(
     row.status = status
     row.task = task
     row.anonymous_question = anonymous_question
-    row.is_urgent = is_urgent
     row.priority = priority
     row.cancelled_at = cancelled_at
     row.cancellation_reason = cancellation_reason
@@ -440,6 +577,7 @@ async def _ensure_waitlist(
             course_id=course.id,
             position_hint=position_hint,
             notified=False,
+            any_slot_on_day=False,
         )
         session.add(row)
         await session.flush()
@@ -451,6 +589,81 @@ async def _ensure_waitlist(
     row.course_id = course.id
     row.position_hint = position_hint
     row.notified = False
+    row.any_slot_on_day = False
+    return row
+
+
+async def _ensure_day_waitlist(
+    session: AsyncSession,
+    *,
+    student: User,
+    professor: User,
+    course: Course | None,
+    preferred_date: date,
+    consultation_type: ConsultationType,
+    position_hint: int,
+    any_slot_on_day: bool = True,
+) -> Waitlist:
+    """Day-level waitlist (no session_id) — matches waitlist_service.add_day_waitlist uniqueness."""
+    course_id = course.id if course else None
+    stmt = select(Waitlist).where(
+        Waitlist.student_id == student.id,
+        Waitlist.professor_id == professor.id,
+        Waitlist.preferred_date == preferred_date,
+        Waitlist.consultation_type == consultation_type,
+        Waitlist.session_id.is_(None),
+    )
+    if course_id is not None:
+        stmt = stmt.where(Waitlist.course_id == course_id)
+    else:
+        stmt = stmt.where(Waitlist.course_id.is_(None))
+    row = await session.scalar(stmt)
+    if not row:
+        row = Waitlist(
+            student_id=student.id,
+            professor_id=professor.id,
+            session_id=None,
+            window_id=None,
+            preferred_date=preferred_date,
+            consultation_type=consultation_type,
+            course_id=course_id,
+            position_hint=position_hint,
+            notified=False,
+            any_slot_on_day=any_slot_on_day,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    row.position_hint = position_hint
+    row.notified = False
+    row.any_slot_on_day = any_slot_on_day
+    return row
+
+
+async def _ensure_exam_registration(
+    session: AsyncSession,
+    *,
+    student: User,
+    academic_event: AcademicEvent,
+) -> ExamRegistration:
+    row = await session.scalar(
+        select(ExamRegistration).where(
+            ExamRegistration.student_id == student.id,
+            ExamRegistration.academic_event_id == academic_event.id,
+        )
+    )
+    if not row:
+        row = ExamRegistration(
+            student_id=student.id,
+            academic_event_id=academic_event.id,
+            status=ExamRegistrationStatus.registered,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    row.status = ExamRegistrationStatus.registered
     return row
 
 
@@ -464,12 +677,17 @@ async def _ensure_thesis_application(
     applied_at: datetime,
     responded_at: datetime | None = None,
 ) -> ThesisApplication:
-    row = await session.scalar(
-        select(ThesisApplication).where(
-            ThesisApplication.student_id == student.id,
-            ThesisApplication.professor_id == professor.id,
+    row = (
+        await session.scalars(
+            select(ThesisApplication)
+            .where(
+                ThesisApplication.student_id == student.id,
+                ThesisApplication.professor_id == professor.id,
+            )
+            .order_by(ThesisApplication.id.desc())
+            .limit(1)
         )
-    )
+    ).first()
     if not row:
         row = ThesisApplication(
             student_id=student.id,
@@ -492,7 +710,7 @@ async def _ensure_thesis_application(
 
 async def seed(session: AsyncSession) -> None:
     now = datetime.now(UTC)
-    today = date.today()
+    today = utc_today()
 
     for key, value, description in DEFAULT_CONFIG:
         existing = await session.scalar(select(SystemConfig).where(SystemConfig.key == key))
@@ -633,6 +851,67 @@ async def seed(session: AsyncSession) -> None:
         hall="Hall M",
         pinned_note="Discrete math consultations: bring attempted proofs or homework drafts.",
         max_thesis_students=3,
+    )
+
+    prof_lazar = await _ensure_user(
+        session,
+        email="prof.stankovic@university.edu",
+        password="ProfPass123!",
+        first_name="Lazar",
+        last_name="Stankovic",
+        role=UserRole.professor,
+        is_active=True,
+        password_change_required=False,
+    )
+    prof_tanja = await _ensure_user(
+        session,
+        email="prof.kostic@university.edu",
+        password="ProfPass123!",
+        first_name="Tanja",
+        last_name="Kostic",
+        role=UserRole.professor,
+        is_active=True,
+        password_change_required=False,
+    )
+    prof_marko = await _ensure_user(
+        session,
+        email="prof.ilic@university.edu",
+        password="ProfPass123!",
+        first_name="Marko",
+        last_name="Ilic",
+        role=UserRole.professor,
+        is_active=True,
+        password_change_required=False,
+    )
+    await _ensure_professor_profile(
+        session,
+        professor=prof_lazar,
+        department="Software Engineering",
+        office_location="Building SE, 120",
+        default_room="SE-120",
+        hall="Hall SE",
+        pinned_note="Agile and process topics: bring your sprint board or backlog export if relevant.",
+        max_thesis_students=2,
+    )
+    await _ensure_professor_profile(
+        session,
+        professor=prof_tanja,
+        department="Software Engineering",
+        office_location="Building SE, 205",
+        default_room="SE-205",
+        hall="Lab SE",
+        pinned_note="QA sessions: attach failing test output or CI logs when possible.",
+        max_thesis_students=3,
+    )
+    await _ensure_professor_profile(
+        session,
+        professor=prof_marko,
+        department="Computer Science",
+        office_location="Building CS, 018",
+        default_room="CS-018",
+        hall="Hall CS",
+        pinned_note="Data structures: sketch the problem input size and expected complexity before we meet.",
+        max_thesis_students=4,
     )
 
     student_ivan = await _ensure_user(
@@ -812,6 +1091,46 @@ async def seed(session: AsyncSession) -> None:
         year_of_study=3,
         department="Computer Science",
     )
+    course_se_fundamentals = await _ensure_course(
+        session,
+        code="CS105",
+        name="Software Engineering Fundamentals",
+        semester=Semester.winter,
+        year_of_study=1,
+        department="Software Engineering",
+    )
+    course_data_structures = await _ensure_course(
+        session,
+        code="CS210",
+        name="Data Structures",
+        semester=Semester.winter,
+        year_of_study=2,
+        department="Computer Science",
+    )
+    course_qa = await _ensure_course(
+        session,
+        code="SE301",
+        name="Software Quality Assurance",
+        semester=Semester.summer,
+        year_of_study=3,
+        department="Software Engineering",
+    )
+    course_calculus = await _ensure_course(
+        session,
+        code="MATH101",
+        name="Calculus I",
+        semester=Semester.winter,
+        year_of_study=1,
+        department="Mathematics",
+    )
+    course_cyber = await _ensure_course(
+        session,
+        code="CS150",
+        name="Introduction to Cybersecurity",
+        semester=Semester.winter,
+        year_of_study=2,
+        department="Computer Science",
+    )
 
     await _ensure_course_professor(session, professor=prof_markovic, course=course_databases)
     await _ensure_course_professor(session, professor=prof_petrovic, course=course_algorithms)
@@ -821,6 +1140,14 @@ async def seed(session: AsyncSession) -> None:
     await _ensure_course_professor(session, professor=prof_stefan, course=course_discrete)
     await _ensure_course_professor(session, professor=prof_petrovic, course=course_ml)
     await _ensure_course_professor(session, professor=prof_jovanovic, course=course_ml)
+    await _ensure_course_professor(session, professor=prof_lazar, course=course_se_fundamentals)
+    await _ensure_course_professor(session, professor=prof_tanja, course=course_qa)
+    await _ensure_course_professor(session, professor=prof_tanja, course=course_web)
+    await _ensure_course_professor(session, professor=prof_marko, course=course_data_structures)
+    await _ensure_course_professor(session, professor=prof_marko, course=course_algorithms)
+    await _ensure_course_professor(session, professor=prof_stefan, course=course_calculus)
+    await _ensure_course_professor(session, professor=prof_radovan, course=course_cyber)
+    await _ensure_course_professor(session, professor=prof_jovanovic, course=course_cyber)
 
     for student, course in (
         (student_ivan, course_databases),
@@ -848,6 +1175,21 @@ async def seed(session: AsyncSession) -> None:
         (student_nina, course_ml),
         (student_nina, course_databases),
         (student_nina, course_discrete),
+        (student_ivan, course_se_fundamentals),
+        (student_milica, course_data_structures),
+        (student_milica, course_qa),
+        (student_luka, course_cyber),
+        (student_luka, course_data_structures),
+        (student_tea, course_se_fundamentals),
+        (student_tea, course_qa),
+        (student_uros, course_calculus),
+        (student_uros, course_cyber),
+        (student_jovana, course_calculus),
+        (student_jovana, course_se_fundamentals),
+        (student_dusan, course_qa),
+        (student_dusan, course_data_structures),
+        (student_nina, course_cyber),
+        (student_nina, course_calculus),
     ):
         await _ensure_course_student(session, student=student, course=course)
 
@@ -858,6 +1200,9 @@ async def seed(session: AsyncSession) -> None:
         (prof_radovan, "monday", time(14, 0), time(16, 0), "wednesday", time(9, 0), time(11, 0)),
         (prof_maja, "tuesday", time(10, 0), time(12, 0), "friday", time(10, 0), time(12, 0)),
         (prof_stefan, "wednesday", time(15, 0), time(17, 0), "friday", time(9, 0), time(11, 0)),
+        (prof_lazar, "monday", time(13, 0), time(15, 0), "thursday", time(10, 0), time(12, 0)),
+        (prof_tanja, "tuesday", time(14, 0), time(16, 0), "friday", time(13, 0), time(15, 0)),
+        (prof_marko, "wednesday", time(9, 0), time(11, 0), "monday", time(16, 0), time(18, 0)),
     ):
         await _ensure_window(
             session,
@@ -878,13 +1223,18 @@ async def seed(session: AsyncSession) -> None:
 
     exam_period = await session.scalar(select(ExamPeriod).where(ExamPeriod.name == "Summer exam period"))
     if not exam_period:
-        session.add(
-            ExamPeriod(
-                date_from=date(today.year, 6, 10),
-                date_to=date(today.year, 6, 25),
-                name="Summer exam period",
-            )
+        exam_period = ExamPeriod(
+            date_from=today - timedelta(days=7),
+            date_to=today + timedelta(days=120),
+            name="Summer exam period",
         )
+        session.add(exam_period)
+        await session.flush()
+    else:
+        exam_period.date_from = min(exam_period.date_from, today - timedelta(days=7))
+        exam_period.date_to = max(exam_period.date_to, today + timedelta(days=120))
+
+    ep_id = exam_period.id
 
     event_databases_exam = await _ensure_event(
         session,
@@ -892,6 +1242,10 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.exam,
         event_date=today + timedelta(days=10),
         name="Databases Final Exam",
+        time_from=time(9, 0),
+        time_to=time(11, 0),
+        hall="Hall A",
+        exam_period_id=ep_id,
     )
     event_algorithms_midterm = await _ensure_event(
         session,
@@ -899,6 +1253,10 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.midterm,
         event_date=today + timedelta(days=14),
         name="Algorithms Midterm",
+        time_from=time(14, 0),
+        time_to=time(16, 0),
+        hall="B204",
+        exam_period_id=None,
     )
     event_systems_exam = await _ensure_event(
         session,
@@ -906,6 +1264,10 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.exam,
         event_date=today + timedelta(days=18),
         name="Operating Systems Final Exam",
+        time_from=time(10, 0),
+        time_to=time(12, 0),
+        hall="Lab 1",
+        exam_period_id=ep_id,
     )
     event_networks_exam = await _ensure_event(
         session,
@@ -913,6 +1275,7 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.exam,
         event_date=today + timedelta(days=12),
         name="Networks Final Exam",
+        exam_period_id=ep_id,
     )
     event_web_midterm = await _ensure_event(
         session,
@@ -920,6 +1283,7 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.midterm,
         event_date=today + timedelta(days=8),
         name="Web Development Midterm",
+        exam_period_id=None,
     )
     event_discrete_exam = await _ensure_event(
         session,
@@ -927,6 +1291,7 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.exam,
         event_date=today + timedelta(days=20),
         name="Discrete Structures Exam",
+        exam_period_id=ep_id,
     )
     event_ml_project = await _ensure_event(
         session,
@@ -934,13 +1299,212 @@ async def seed(session: AsyncSession) -> None:
         event_type=AcademicEventType.exam,
         event_date=today + timedelta(days=22),
         name="Machine Learning Project Deadline",
+        exam_period_id=ep_id,
+    )
+    event_datastructures_midterm = await _ensure_event(
+        session,
+        course=course_data_structures,
+        event_type=AcademicEventType.midterm,
+        event_date=today + timedelta(days=16),
+        name="Data Structures Midterm",
+        time_from=time(9, 0),
+        time_to=time(11, 0),
+        hall="CS-018",
+        exam_period_id=None,
+    )
+    event_se_fundamentals_quiz = await _ensure_event(
+        session,
+        course=course_se_fundamentals,
+        event_type=AcademicEventType.midterm,
+        event_date=today + timedelta(days=9),
+        name="Software Engineering Fundamentals Quiz",
+        exam_period_id=None,
+    )
+
+    event_databases_midterm_ii = await _ensure_event(
+        session,
+        course=course_databases,
+        event_type=AcademicEventType.midterm,
+        event_date=today + timedelta(days=23),
+        name="Databases Midterm II — Transactions & recovery",
+        time_from=time(13, 0),
+        time_to=time(15, 0),
+        hall="A-201",
+        exam_period_id=ep_id,
+    )
+    event_databases_distributed = await _ensure_event(
+        session,
+        course=course_databases,
+        event_type=AcademicEventType.exam,
+        event_date=today + timedelta(days=31),
+        name="Databases — Distributed SQL & consistency",
+        time_from=time(9, 0),
+        time_to=time(12, 0),
+        hall="Hall A",
+        exam_period_id=ep_id,
+    )
+
+    # Past exams (event_date strictly before today) — enables graded work review notices in the UI
+    # (see exam_service.list_professor_exams: can_notify_graded_review).
+    event_databases_past_final = await _ensure_event(
+        session,
+        course=course_databases,
+        event_type=AcademicEventType.exam,
+        event_date=today - timedelta(days=48),
+        name="Databases Final Exam — January sitting (completed)",
+        time_from=time(9, 0),
+        time_to=time(11, 0),
+        hall="Hall A",
+        exam_period_id=None,
+    )
+    event_algorithms_past_midterm = await _ensure_event(
+        session,
+        course=course_algorithms,
+        event_type=AcademicEventType.midterm,
+        event_date=today - timedelta(days=21),
+        name="Algorithms Midterm — February (completed)",
+        time_from=time(14, 0),
+        time_to=time(16, 0),
+        hall="B204",
+        exam_period_id=None,
+    )
+    event_systems_past_practical = await _ensure_event(
+        session,
+        course=course_systems,
+        event_type=AcademicEventType.exam,
+        event_date=today - timedelta(days=6),
+        name="Operating Systems Practical Exam (completed)",
+        time_from=time(10, 0),
+        time_to=time(12, 30),
+        hall="Lab 1",
+        exam_period_id=None,
+    )
+
+    # Prof. Ana Marković (Databases): preparation votes + scheduling requests for /professor/requests
+    await _ensure_preparation_vote(
+        session,
+        student=student_ivan,
+        course=course_databases,
+        event=event_databases_exam,
+        preferred_times=["Wed afternoon", "Thu before 14:00"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_milica,
+        course=course_databases,
+        event=event_databases_exam,
+        preferred_times=["Fri 10:00–12:00", "Mon morning"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_sara,
+        course=course_databases,
+        event=event_databases_exam,
+        preferred_times=["Tue 15:00+", "Wed afternoon"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_tea,
+        course=course_databases,
+        event=event_databases_exam,
+        preferred_times=["Any weekday after 13:00"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_nina,
+        course=course_databases,
+        event=event_databases_exam,
+        preferred_times=["Thu 10–12", "Thu 14–16"],
+    )
+    await _ensure_scheduling_request(
+        session,
+        professor=prof_markovic,
+        course=course_databases,
+        event=event_databases_exam,
+        vote_count=5,
+        status=SchedulingRequestStatus.pending,
+        deadline_at=now + timedelta(days=2),
+    )
+
+    await _ensure_preparation_vote(
+        session,
+        student=student_ivan,
+        course=course_databases,
+        event=event_databases_midterm_ii,
+        preferred_times=["Week before exam: mornings"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_milica,
+        course=course_databases,
+        event=event_databases_midterm_ii,
+        preferred_times=["Mon 10–12", "Wed 10–12"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_sara,
+        course=course_databases,
+        event=event_databases_midterm_ii,
+        preferred_times=["Prefer online recap slot"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_tea,
+        course=course_databases,
+        event=event_databases_midterm_ii,
+        preferred_times=["Fri afternoon only"],
+    )
+    await _ensure_scheduling_request(
+        session,
+        professor=prof_markovic,
+        course=course_databases,
+        event=event_databases_midterm_ii,
+        vote_count=4,
+        status=SchedulingRequestStatus.pending,
+        deadline_at=now + timedelta(days=3),
+    )
+
+    await _ensure_preparation_vote(
+        session,
+        student=student_milica,
+        course=course_databases,
+        event=event_databases_distributed,
+        preferred_times=["Two weeks before: Tue/Thu"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_sara,
+        course=course_databases,
+        event=event_databases_distributed,
+        preferred_times=["Hall study groups OK"],
+    )
+    await _ensure_preparation_vote(
+        session,
+        student=student_nina,
+        course=course_databases,
+        event=event_databases_distributed,
+        preferred_times=["Sat morning if offered"],
+    )
+    await _ensure_scheduling_request(
+        session,
+        professor=prof_markovic,
+        course=course_databases,
+        event=event_databases_distributed,
+        vote_count=3,
+        status=SchedulingRequestStatus.declined,
+        deadline_at=now + timedelta(days=1),
+        responded_at=now - timedelta(hours=5),
     )
 
     await _ensure_announcement(
         session,
         admin=admin,
         title="Welcome to the demo data set",
-        body="The seed includes six professors, ten students, seven courses, bookings, thesis cases, and waitlist entries.",
+        body=(
+            "The seed includes nine professors, ten students, twelve courses, sample exam events, "
+            "preparation votes and professor scheduling requests (see Prof. Marković), "
+            "bookings, thesis applications, session waitlists (full slots), and day-level waitlists for testing."
+        ),
         expires_at=now + timedelta(days=30),
     )
     await _ensure_announcement(
@@ -1067,6 +1631,16 @@ async def seed(session: AsyncSession) -> None:
         time_to=time(11, 0),
         capacity=12,
     )
+    petar_algo_waitlist_demo = await _ensure_session(
+        session,
+        professor=prof_petrovic,
+        course=course_algorithms,
+        consultation_type=ConsultationType.general,
+        session_date=today + timedelta(days=11),
+        time_from=time(15, 0),
+        time_to=time(16, 0),
+        capacity=2,
+    )
     radovan_prep_upcoming = await _ensure_session(
         session,
         professor=prof_radovan,
@@ -1124,7 +1698,6 @@ async def seed(session: AsyncSession) -> None:
         student=student_ivan,
         consult_session=ana_prep_upcoming,
         status=BookingStatus.active,
-        is_urgent=True,
         task="Exam preparation for transactions and indexes.",
         anonymous_question="I want to cover transactions and indexes.",
     )
@@ -1229,6 +1802,37 @@ async def seed(session: AsyncSession) -> None:
         status=BookingStatus.active,
         task="Exam prep: routing and switching.",
     )
+    await _ensure_booking(
+        session,
+        student=student_dusan,
+        consult_session=petar_algo_waitlist_demo,
+        status=BookingStatus.active,
+        task="Recurrence and master theorem.",
+    )
+    await _ensure_booking(
+        session,
+        student=student_tea,
+        consult_session=petar_algo_waitlist_demo,
+        status=BookingStatus.active,
+        task="Heaps and priority queues.",
+    )
+
+    await _ensure_waitlist(
+        session,
+        student=student_jovana,
+        professor=prof_petrovic,
+        consult_session=petar_algo_waitlist_demo,
+        course=course_algorithms,
+        position_hint=1,
+    )
+    await _ensure_waitlist(
+        session,
+        student=student_nina,
+        professor=prof_petrovic,
+        consult_session=petar_algo_waitlist_demo,
+        course=course_algorithms,
+        position_hint=2,
+    )
 
     await _ensure_waitlist(
         session,
@@ -1238,6 +1842,62 @@ async def seed(session: AsyncSession) -> None:
         course=course_databases,
         position_hint=1,
     )
+    await _ensure_waitlist(
+        session,
+        student=student_milica,
+        professor=prof_markovic,
+        consult_session=ana_review_full,
+        course=course_databases,
+        position_hint=2,
+    )
+    await _ensure_waitlist(
+        session,
+        student=student_nikola,
+        professor=prof_markovic,
+        consult_session=ana_review_full,
+        course=course_databases,
+        position_hint=3,
+    )
+
+    await _ensure_day_waitlist(
+        session,
+        student=student_luka,
+        professor=prof_markovic,
+        course=course_databases,
+        preferred_date=today + timedelta(days=12),
+        consultation_type=ConsultationType.general,
+        position_hint=1,
+        any_slot_on_day=True,
+    )
+    await _ensure_day_waitlist(
+        session,
+        student=student_milica,
+        professor=prof_petrovic,
+        course=course_algorithms,
+        preferred_date=today + timedelta(days=13),
+        consultation_type=ConsultationType.general,
+        position_hint=1,
+        any_slot_on_day=True,
+    )
+    await _ensure_day_waitlist(
+        session,
+        student=student_sara,
+        professor=prof_jovanovic,
+        course=course_systems,
+        preferred_date=today + timedelta(days=15),
+        consultation_type=ConsultationType.general,
+        position_hint=1,
+        any_slot_on_day=False,
+    )
+
+    await _ensure_exam_registration(session, student=student_ivan, academic_event=event_databases_exam)
+    await _ensure_exam_registration(session, student=student_milica, academic_event=event_databases_exam)
+    await _ensure_exam_registration(session, student=student_ivan, academic_event=event_databases_past_final)
+    await _ensure_exam_registration(session, student=student_sara, academic_event=event_databases_past_final)
+    await _ensure_exam_registration(session, student=student_ivan, academic_event=event_algorithms_past_midterm)
+    await _ensure_exam_registration(session, student=student_nikola, academic_event=event_algorithms_past_midterm)
+    await _ensure_exam_registration(session, student=student_milica, academic_event=event_systems_past_practical)
+    await _ensure_exam_registration(session, student=student_sara, academic_event=event_systems_past_practical)
 
     await _ensure_thesis_application(
         session,
@@ -1272,26 +1932,56 @@ async def seed(session: AsyncSession) -> None:
     student_nikola.thesis_professor_id = None
     student_sara.thesis_professor_id = None
 
-    # Add some professor announcements
-    session.add(ProfessorAnnouncement(
-        professor_id=prof_markovic.id,
-        course_id=course_databases.id,
+    await _ensure_professor_announcement(
+        session,
+        professor=prof_markovic,
+        course=course_databases,
         academic_event_id=event_databases_exam.id,
         announcement_type="preparation",
         title="Preparation Session for Databases Exam",
-        message="I'll be holding a preparation session for the upcoming databases exam. This will cover key topics like normalization, indexing, and query optimization. Students can book slots through the chatbot or directly.",
+        message=(
+            "I'll be holding a preparation session for the upcoming databases exam. This will cover key topics like "
+            "normalization, indexing, and query optimization. Students can book slots through the chatbot or directly."
+        ),
         created_at=now - timedelta(days=5),
         expires_at=now + timedelta(days=5),
-    ))
-    session.add(ProfessorAnnouncement(
-        professor_id=prof_jovanovic.id,
-        course_id=course_systems.id,
+    )
+    await _ensure_professor_announcement(
+        session,
+        professor=prof_jovanovic,
+        course=course_systems,
+        academic_event_id=None,
         announcement_type="general",
         title="Office Hours Reminder",
-        message="Remember that my regular office hours are on Tuesdays 12-14 in Hall C. For thesis students, additional slots are available on Thursdays.",
+        message=(
+            "Remember that my regular office hours are on Tuesdays 12-14 in Hall C. For thesis students, "
+            "additional slots are available on Thursdays."
+        ),
         created_at=now - timedelta(days=1),
         expires_at=now + timedelta(days=14),
-    ))
+    )
+    await _ensure_professor_announcement(
+        session,
+        professor=prof_marko,
+        course=course_data_structures,
+        academic_event_id=event_datastructures_midterm.id,
+        announcement_type="graded_work_review",
+        title="Data Structures midterm review",
+        message="Book a graded-work review slot if you want feedback on practice problems before the midterm.",
+        created_at=now - timedelta(days=2),
+        expires_at=now + timedelta(days=20),
+    )
+    await _ensure_professor_announcement(
+        session,
+        professor=prof_lazar,
+        course=course_se_fundamentals,
+        academic_event_id=event_se_fundamentals_quiz.id,
+        announcement_type="preparation",
+        title="Quiz preparation",
+        message="I will run a short prep session for the fundamentals quiz; use the booking assistant to grab a slot.",
+        created_at=now - timedelta(days=1),
+        expires_at=now + timedelta(days=10),
+    )
 
     await session.commit()
     logger.info("Seed completed with expanded demo data.")

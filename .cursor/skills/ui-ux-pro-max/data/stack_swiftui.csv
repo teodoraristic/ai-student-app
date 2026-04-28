@@ -1,0 +1,4 @@
+topic,keywords,tips
+navigation,"navigationstack,tab",Use NavigationStack; preserve state
+dynamic-type,"dynamic type,font",Avoid fixed heights; test largest accessibility sizes
+haptics,"haptic,feedback",Confirmations only; avoid overuse

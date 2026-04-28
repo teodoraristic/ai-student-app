@@ -6,7 +6,7 @@ type AuthState = {
   user: AuthUser | null
   token: string | null
   loading: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<AuthUser>
   logout: () => void
   refreshUser: () => Promise<void>
   setToken: (t: string | null) => void
@@ -55,6 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
       setToken(data.access_token)
       setUser(data.user)
+      return data.user
     },
     [setToken],
   )

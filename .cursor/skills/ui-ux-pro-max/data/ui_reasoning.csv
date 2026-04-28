@@ -1,0 +1,7 @@
+signal,priority_note,pattern,recommendation,anti_pattern
+saas dashboard dense,high,Information hierarchy + calm surfaces,Use neutral surfaces + one accent; strict 8pt grid; table-first patterns,Neon gradients on every card; random radii
+fintech trust minimal,high,Credible restrained UI,Deep navy or charcoal base; clear numerics; conservative motion,Playful mascots on primary flows
+ecommerce conversion,high,Scannable PDP + strong CTAs,Large imagery; sticky buy CTA; clear shipping/returns,Hidden price or surprise fees tone
+healthcare clarity,critical,Readable + accessible defaults,WCAG AA+; plain language; generous whitespace,Cute illustrations that obscure actions
+portfolio creative,medium,Editorial layout + strong type,Asymmetric grids optional; one display face,Five competing display faces
+mobile consumer,critical,Touch + thumb zones,44–48px targets; bottom actions; reduce hover reliance,Hover-only menus on mobile web

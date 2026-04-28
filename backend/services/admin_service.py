@@ -33,6 +33,7 @@ async def create_user(
     last_name: str,
     role: UserRole,
     student_number: Optional[str],
+    study_year: Optional[int],
     created_by: User,
 ) -> tuple[User, str]:
     exists = await session.scalar(select(User).where(User.email == email))
@@ -43,12 +44,23 @@ async def create_user(
     otp_hash = auth_service.hash_password(otp)
     dummy_password = auth_service.hash_password(secrets.token_urlsafe(32))
 
+    final_year = False
+    stored_year: Optional[int] = None
+    if role == UserRole.student:
+        stored_year = study_year
+        if stored_year is None:
+            raise ValueError("study_year is required for students")
+        # Year 4+ treated as final-year for thesis-related rules (bachelor IV / master).
+        final_year = stored_year >= 4
+
     user = User(
         email=email,
         first_name=first_name,
         last_name=last_name,
         role=role,
         student_number=student_number if role == UserRole.student else None,
+        study_year=stored_year,
+        is_final_year=final_year,
         password_hash=dummy_password,
         one_time_password_hash=otp_hash,
         password_change_required=True,

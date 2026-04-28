@@ -3,6 +3,7 @@
 from datetime import date, time, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import (
@@ -15,6 +16,7 @@ from backend.db.models import (
     ExamPeriod,
     SessionFormat,
     SessionStatus,
+    SystemConfig,
     ThesisApplication,
     ThesisApplicationStatus,
     User,
@@ -48,9 +50,11 @@ class TestGeneralSlots:
         assert len(slots) > 0
         assert all(s.consultation_type == ConsultationType.general for s in slots)
 
-    async def test_blocked_during_exam_period(self, db, student, professor, course, enrolled):
-        """GENERAL blocked when today falls inside an exam period."""
-        today = date.today()
+    async def test_general_slots_not_blocked_by_exam_period(self, db, student, professor, course, enrolled):
+        """GENERAL consultations are listed even when an academic exam period includes today."""
+        from backend.dates import utc_today
+
+        today = utc_today()
         db.add(ExamPeriod(date_from=today - timedelta(days=1), date_to=today + timedelta(days=5), name="Exam"))
         await db.flush()
         await add_windows_all_days(db, professor.id)
@@ -64,7 +68,7 @@ class TestGeneralSlots:
             student_id=student.id,
         )
 
-        assert slots == []
+        assert len(slots) > 0
 
     async def test_not_enrolled_raises(self, db, student, professor, course):
         """No CourseStudent row → ValueError."""
@@ -82,6 +86,21 @@ class TestGeneralSlots:
 
     async def test_full_sessions_excluded(self, db, student, professor, course, enrolled):
         """Session at full capacity not returned."""
+        row = await db.scalar(
+            select(SystemConfig).where(SystemConfig.key == "general_consultation_slot_capacity")
+        )
+        if row:
+            row.value = "1"
+        else:
+            db.add(
+                SystemConfig(
+                    key="general_consultation_slot_capacity",
+                    value="1",
+                    description="test",
+                )
+            )
+        await db.flush()
+
         await add_windows_all_days(db, professor.id)
 
         # First call creates the session row
@@ -267,6 +286,40 @@ class TestThesisSlots:
 
         assert len(slots) > 0
 
+    async def test_duplicate_active_thesis_rows_still_return_slots(
+        self, db, student, professor, course, enrolled
+    ):
+        """Multiple active ThesisApplication rows must not crash get_free_slots (no scalar())."""
+        db.add(
+            ThesisApplication(
+                student_id=student.id,
+                professor_id=professor.id,
+                topic_description="first",
+                status=ThesisApplicationStatus.active,
+            )
+        )
+        db.add(
+            ThesisApplication(
+                student_id=student.id,
+                professor_id=professor.id,
+                topic_description="second",
+                status=ThesisApplicationStatus.active,
+            )
+        )
+        await add_windows_all_days(db, professor.id, wtype=WindowType.thesis)
+        await db.flush()
+
+        slots = await slot_service.get_free_slots(
+            db,
+            professor_id=professor.id,
+            course_id=None,
+            ctype=ConsultationType.thesis,
+            group_size=1,
+            student_id=student.id,
+        )
+
+        assert len(slots) > 0
+
 
 class TestGetFullSessions:
     async def test_returns_full_announced_sessions(self, db, student, professor, course, enrolled):
@@ -303,22 +356,15 @@ class TestGetFullSessions:
         assert full == []
 
 
-class TestAvailableTypesExamPeriod:
-    def test_exam_period_includes_preparation_not_general(self):
-        """Phase 1: preparation disabled, only review and thesis during exam period."""
+class TestAvailableTypes:
+    def test_always_includes_general_review_thesis(self):
+        """Phase 1: preparation disabled; general is offered regardless of calendar."""
         today = date.today()
-        types = slot_service.get_available_types(today, exam_period=True)
-        assert ConsultationType.preparation not in types  # Phase 1: disabled
-        assert ConsultationType.general not in types
+        types = slot_service.get_available_types(today)
+        assert ConsultationType.preparation not in types
+        assert ConsultationType.general in types
         assert ConsultationType.thesis in types
         assert ConsultationType.graded_work_review in types
-
-    def test_outside_exam_includes_general(self):
-        """Phase 1: preparation disabled, general + review + thesis available."""
-        today = date.today()
-        types = slot_service.get_available_types(today, exam_period=False)
-        assert ConsultationType.general in types
-        assert ConsultationType.preparation not in types  # Phase 1: disabled
 
 
 class TestSubSlotSplitting:
@@ -456,7 +502,22 @@ class TestSubSlotSplitting:
     async def test_booking_only_takes_one_subslot(self, db, student, professor, course, enrolled):
         """Test that booking one 15-min sub-slot leaves other sub-slots free."""
         from datetime import time
-        
+
+        row = await db.scalar(
+            select(SystemConfig).where(SystemConfig.key == "general_consultation_slot_capacity")
+        )
+        if row:
+            row.value = "1"
+        else:
+            db.add(
+                SystemConfig(
+                    key="general_consultation_slot_capacity",
+                    value="1",
+                    description="test",
+                )
+            )
+        await db.flush()
+
         window = ConsultationWindow(
             professor_id=professor.id,
             day_of_week="wednesday",
@@ -565,10 +626,12 @@ class TestSubSlotSplitting:
         thursday_slots = [s for s in slots if s.session_date == next_thursday]
         assert len(thursday_slots) == 0
 
-    async def test_general_exam_period_returns_empty(self, db, student, professor, course, enrolled):
-        """Test that GENERAL during exam period returns empty list (existing behavior)."""
+    async def test_general_slots_during_exam_period(self, db, student, professor, course, enrolled):
+        """GENERAL slots are returned even when the horizon overlaps an exam period."""
         from datetime import time
-        
+
+        from backend.dates import utc_today
+
         window = ConsultationWindow(
             professor_id=professor.id,
             day_of_week="friday",
@@ -578,9 +641,8 @@ class TestSubSlotSplitting:
             slot_duration_minutes=15,
         )
         db.add(window)
-        
-        # Create exam period covering next 2 weeks
-        today = date.today()
+
+        today = utc_today()
         exam = ExamPeriod(
             date_from=today,
             date_to=today + timedelta(weeks=2),
@@ -588,7 +650,7 @@ class TestSubSlotSplitting:
         )
         db.add(exam)
         await db.flush()
-        
+
         slots = await slot_service.get_free_slots(
             db,
             professor_id=professor.id,
@@ -598,8 +660,8 @@ class TestSubSlotSplitting:
             student_id=student.id,
             next_weeks=2,
         )
-        
-        assert slots == []
+
+        assert len(slots) > 0
 
     async def test_thesis_subslot_requires_active_application(self, db, student, professor, course, enrolled):
         """Test that thesis sub-slot generation requires active ThesisApplication."""

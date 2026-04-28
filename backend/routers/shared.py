@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.base import get_db
@@ -33,7 +34,11 @@ async def post_feedback(
     if existing:
         raise HTTPException(status_code=400, detail="Already submitted")
     db.add(Feedback(booking_id=booking_id, rating=body.rating, comment=body.comment))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Already submitted") from None
     return {"ok": True}
 
 

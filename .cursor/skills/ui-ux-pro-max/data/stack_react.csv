@@ -1,0 +1,4 @@
+topic,keywords,tips
+state,"state,context,zustand",Colocate state; avoid prop drilling via context sprawl
+lists,"list,virtual,window",Virtualize long lists; stable keys
+a11y,"aria,role,button",Use semantic elements first; label icon buttons

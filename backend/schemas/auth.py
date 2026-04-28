@@ -22,6 +22,7 @@ class UserPublic(BaseModel):
     password_change_required: bool
     consent_accepted_at: Optional[datetime] = None
     is_final_year: bool = False
+    study_year: Optional[int] = None
 
     model_config = {"from_attributes": True}
 

@@ -130,6 +130,7 @@ async def add_windows_all_days(
     t_to: time = time(10, 0),
 ) -> None:
     """Add ConsultationWindows for every day of the week."""
+    slot_mins = 60 if wtype == WindowType.thesis else 15
     for wd in WEEKDAYS:
         db.add(ConsultationWindow(
             professor_id=professor_id,
@@ -137,6 +138,7 @@ async def add_windows_all_days(
             time_from=t_from,
             time_to=t_to,
             window_type=wtype,
+            slot_duration_minutes=slot_mins,
             is_active=True,
         ))
     await db.flush()
@@ -172,5 +174,4 @@ def active_booking(student_id: int, session_id: int, group_size: int = 1) -> Boo
         group_size=group_size,
         status=BookingStatus.active,
         priority=BookingPriority.normal,
-        is_urgent=False,
     )

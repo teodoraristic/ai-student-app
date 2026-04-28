@@ -1,0 +1,4 @@
+topic,keywords,tips
+tokens,"tailwind,config,theme",Map semantic tokens in config; avoid arbitrary hex in JSX
+responsive,"sm:,md:,lg:",Mobile-first breakpoints; test container queries where supported
+plugins,"tailwind,plugin",Typography + forms plugins for consistent rhythm

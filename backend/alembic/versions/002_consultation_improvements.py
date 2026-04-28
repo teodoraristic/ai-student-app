@@ -10,6 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from backend.alembic_migration_utils import has_column
+
 revision: str = "002"
 down_revision: Union[str, None] = "001"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -17,9 +19,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("users", sa.Column("is_final_year", sa.Boolean(), nullable=False, server_default="false"))
-    op.add_column("consultation_sessions", sa.Column("announced_by_professor", sa.Boolean(), nullable=False, server_default="false"))
-    op.add_column("waitlists", sa.Column("session_id", sa.Integer(), sa.ForeignKey("consultation_sessions.id"), nullable=True))
+    bind = op.get_bind()
+    if not has_column(bind, "users", "is_final_year"):
+        op.add_column("users", sa.Column("is_final_year", sa.Boolean(), nullable=False, server_default="false"))
+    if not has_column(bind, "consultation_sessions", "announced_by_professor"):
+        op.add_column(
+            "consultation_sessions",
+            sa.Column("announced_by_professor", sa.Boolean(), nullable=False, server_default="false"),
+        )
+    if not has_column(bind, "waitlists", "session_id"):
+        op.add_column(
+            "waitlists",
+            sa.Column("session_id", sa.Integer(), sa.ForeignKey("consultation_sessions.id"), nullable=True),
+        )
     op.alter_column("waitlists", "window_id", nullable=True)
     op.alter_column("consultation_sessions", "course_id", nullable=True)
 

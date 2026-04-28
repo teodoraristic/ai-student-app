@@ -1,7 +1,17 @@
 import { useState } from 'react'
-import { useNotifications } from '../hooks/useNotifications'
+import { useNavigate } from 'react-router-dom'
+import { useNotifications, type NotificationRow } from '../hooks/useNotifications'
+
+function notificationLinkCta(n: NotificationRow): string {
+  if (!n.link) return 'Open'
+  if (n.link.includes('prepFlow=1')) return 'Book prep in UniBot'
+  if (n.link.includes('gradedReviewFlow=1')) return 'Book review in UniBot'
+  if (n.link.includes('/student/bookings')) return 'Go to My Bookings'
+  return 'Open link'
+}
 
 export function NotificationBell() {
+  const navigate = useNavigate()
   const { items, markRead, markAllRead } = useNotifications(60000)
   const [open, setOpen] = useState(false)
   const unread = items.filter((n) => !n.is_read).length
@@ -85,24 +95,54 @@ export function NotificationBell() {
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
               {items.map((n) => (
                 <li key={n.id}>
-                  <button
-                    type="button"
+                  <div
                     style={{
-                      width: '100%',
-                      textAlign: 'left',
                       padding: '0.5rem 0.6rem',
                       borderRadius: 6,
-                      fontSize: '0.83rem',
                       background: n.is_read ? 'transparent' : '#f0f4ff',
-                      color: n.is_read ? '#4d6080' : '#0f1f3d',
-                      fontWeight: n.is_read ? 400 : 500,
-                      border: 'none',
-                      cursor: 'pointer',
                     }}
-                    onClick={() => { if (!n.is_read) void markRead(n.id) }}
                   >
-                    {n.text}
-                  </button>
+                    <button
+                      type="button"
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: 0,
+                        fontSize: '0.83rem',
+                        background: 'transparent',
+                        color: n.is_read ? '#4d6080' : '#0f1f3d',
+                        fontWeight: n.is_read ? 400 : 500,
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => { if (!n.is_read) void markRead(n.id) }}
+                    >
+                      {n.text}
+                    </button>
+                    {n.link && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!n.is_read) void markRead(n.id)
+                          if (n.link) navigate(n.link)
+                        }}
+                        style={{
+                          marginTop: 6,
+                          display: 'block',
+                          padding: 0,
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          color: '#3b5bdb',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                        }}
+                      >
+                        {notificationLinkCta(n)}
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

@@ -1,0 +1,5 @@
+topic,keywords,tips
+routing,"app router,layouts",Colocate loading/error.tsx; parallel routes for shells
+images,"next/image,fill,sizes",Always set sizes; priority LCP hero
+fonts,"next/font,layout shift",Use next/font; avoid invisible text flash
+data,"fetch,cache,revalidate",Prefer server fetching; explicit revalidate tags

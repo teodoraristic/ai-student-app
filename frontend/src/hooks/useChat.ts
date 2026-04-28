@@ -3,10 +3,9 @@ import { api } from '../api/client'
 
 export type ChatPayload = {
   message: string
-  slots: { id: number; label: string }[]
-  chips: { id: number; label: string }[]
+  slots: { id: number; label: string; action?: string }[]
+  chips: { id: number; label: string; action?: string }[]
   phase: string
-  manual_form: boolean
   context: Record<string, unknown>
 }
 
@@ -31,11 +30,11 @@ export function useChat() {
     setError(null)
     try {
       const { data } = await api.post<ChatPayload>('/chat', { text, structured })
-      return { ok: true, data }
+      return { ok: true as const, data }
     } catch (e: unknown) {
       const msg = chatErrorMessage(e)
       setError(msg)
-      return { ok: false, error: msg }
+      return { ok: false as const, error: msg }
     } finally {
       setLoading(false)
     }

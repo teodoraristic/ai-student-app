@@ -1,0 +1,4 @@
+topic,keywords,tips
+layout,"flex,expanded",Prefer Flex; avoid hard-coded pixel heights for text
+theme,"themeextension,material3",Central ThemeData; use ColorScheme surfaces
+performance,"repaint,shader",Avoid rebuilding heavy subtrees; use const constructors

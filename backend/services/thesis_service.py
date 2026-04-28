@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import (
+    Booking,
+    ConsultationSession,
     ConsultationType,
+    Course,
     CourseProfessor,
     CourseStudent,
+    Feedback,
     ProfessorProfile,
     ThesisApplication,
     ThesisApplicationStatus,
@@ -64,6 +68,74 @@ async def first_shared_course_id(
     )
 
 
+async def list_thesis_consultation_history(session: AsyncSession, student: User) -> list[dict[str, Any]]:
+    """Past and upcoming thesis bookings with the student's approved mentor only."""
+    active = await session.scalar(
+        select(ThesisApplication)
+        .where(
+            ThesisApplication.student_id == student.id,
+            ThesisApplication.status == ThesisApplicationStatus.active,
+        )
+        .order_by(ThesisApplication.applied_at.desc())
+        .limit(1)
+    )
+    if not active:
+        return []
+
+    mentor_id = active.professor_id
+    stmt = (
+        select(Booking, ConsultationSession)
+        .join(ConsultationSession, ConsultationSession.id == Booking.session_id)
+        .where(
+            Booking.student_id == student.id,
+            ConsultationSession.consultation_type == ConsultationType.thesis,
+            ConsultationSession.professor_id == mentor_id,
+        )
+        .order_by(
+            ConsultationSession.session_date.asc(),
+            ConsultationSession.time_from.asc(),
+            Booking.id.asc(),
+        )
+    )
+    pairs = list((await session.execute(stmt)).all())
+
+    prof = await session.get(User, mentor_id)
+    prof_name = f"{prof.first_name} {prof.last_name}" if prof else None
+    profile = await session.scalar(select(ProfessorProfile).where(ProfessorProfile.user_id == mentor_id))
+    hall_default: str | None = None
+    if profile:
+        h = (profile.hall or "").strip() or (profile.default_room or "").strip()
+        hall_default = h or None
+
+    out: list[dict[str, Any]] = []
+    for b, cs in pairs:
+        course = await session.get(Course, cs.course_id) if cs.course_id else None
+        has_feedback = (
+            await session.scalar(select(Feedback.id).where(Feedback.booking_id == b.id).limit(1))
+        ) is not None
+        out.append(
+            {
+                "id": b.id,
+                "session_id": b.session_id,
+                "status": b.status.value,
+                "priority": b.priority.value,
+                "session_date": cs.session_date.isoformat(),
+                "time_from": cs.time_from.strftime("%H:%M"),
+                "time_to": cs.time_to.strftime("%H:%M"),
+                "consultation_type": cs.consultation_type.value,
+                "professor_name": prof_name,
+                "course_code": course.code if course else None,
+                "course_name": course.name if course else None,
+                "hall": hall_default,
+                "task": b.task,
+                "anonymous_question": b.anonymous_question,
+                "has_feedback": has_feedback,
+                "booked_at": b.created_at.isoformat(),
+            }
+        )
+    return out
+
+
 async def try_auto_book_thesis_intro_session(
     session: AsyncSession,
     *,
@@ -100,7 +172,6 @@ async def try_auto_book_thesis_intro_session(
         session_id=slots[0].id,
         task="Thesis consultation",
         anonymous_question=preview,
-        is_urgent=False,
         group_size=1,
     )
     cs = slots[0]

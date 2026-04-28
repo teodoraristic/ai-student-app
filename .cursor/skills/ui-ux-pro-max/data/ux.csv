@@ -1,0 +1,9 @@
+tag,keywords,check,avoid,refs
+color-contrast,"contrast,a11y,wcag",4.5:1 body text; 3:1 large,Gray on gray body,WCAG
+focus-states,"focus,keyboard,ring",Visible 2–4px focus ring,outline-none without replacement,MD HIG
+touch-target,"touch,target,mobile",44–48px min targets; hitSlop,Icon-only 16px tap areas,HIG MD
+reduced-motion,"motion,a11y,prefers",prefers-reduced-motion honored,Parallax without guard,HIG
+loading,"loading,skeleton,spinner",Skeleton >300ms loads; disable submit,Spinners on <200ms flashes,MD
+forms,"form,label,error",Visible labels; errors near fields,Placeholder-only labels,MD
+animation,"animation,transition,easing",150–300ms micro; transform/opacity,Animating width/height,MD
+z-index,"z,modal,overlay",Layer scale documented,Random 99999 values,Team tokens

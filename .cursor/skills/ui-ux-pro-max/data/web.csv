@@ -1,0 +1,5 @@
+topic,keywords,tips
+viewport,"viewport,meta,mobile",width=device-width initial-scale=1; never disable zoom
+responsive,"breakpoint,container",Mobile-first; fluid type; test 375 + landscape
+pointer,"hover,click",Primary actions on click; hover enhancement only desktop
+semantic-html,"semantic,main,nav",Landmarks; h1 per view; label/for

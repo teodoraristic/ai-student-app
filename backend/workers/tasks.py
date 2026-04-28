@@ -1,7 +1,7 @@
 """APScheduler task implementations — each run logs to scheduler_logs."""
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +27,7 @@ from backend.db.models import (
     UserRole,
     Waitlist,
 )
+from backend.dates import utc_today
 from backend.services import booking_service, config_service, notification_service, slot_service
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ async def run_task_by_name(session: AsyncSession, task_name: str) -> None:
 
 
 async def reminder_check(session: AsyncSession) -> None:
-    tomorrow = date.today() + timedelta(days=1)
+    tomorrow = utc_today() + timedelta(days=1)
     sessions = list(
         (await session.scalars(select(ConsultationSession).where(ConsultationSession.session_date == tomorrow))).all()
     )
@@ -90,7 +91,7 @@ async def reminder_check(session: AsyncSession) -> None:
 
 
 async def daily_check(session: AsyncSession) -> None:
-    today = date.today()
+    today = utc_today()
     days = await config_service.get_config_int(session, "days_before_exam_trigger", 7)
     target = today + timedelta(days=days)
 
@@ -195,7 +196,7 @@ async def daily_check(session: AsyncSession) -> None:
 
 async def waitlist_check(session: AsyncSession) -> None:
     """Remove stale waitlist rows; promote students when seats open (same rules as cancellation)."""
-    today = date.today()
+    today = utc_today()
     stale = list(
         (
             await session.scalars(
@@ -216,10 +217,64 @@ async def waitlist_check(session: AsyncSession) -> None:
                 notification_type="waitlist",
             )
             continue
-        if cs.consultation_type == ConsultationType.thesis:
-            continue
         await booking_service.drain_waitlist_for_session(session, cs.id, cs)
     await session.flush()
+
+    past_day = list(
+        (
+            await session.scalars(
+                select(Waitlist).where(Waitlist.session_id.is_(None), Waitlist.preferred_date < today)
+            )
+        ).all()
+    )
+    for wl in past_day:
+        sid = wl.student_id
+        await session.delete(wl)
+        await session.flush()
+        await notification_service.notify_user(
+            session,
+            sid,
+            "Your day-based consultation waitlist entry expired because the date has passed.",
+            notification_type="waitlist",
+        )
+    await session.flush()
+
+    active_day = list(
+        (
+            await session.scalars(
+                select(Waitlist).where(
+                    Waitlist.session_id.is_(None),
+                    Waitlist.notified.is_(False),
+                    Waitlist.preferred_date >= today,
+                )
+            )
+        ).all()
+    )
+    for wl in active_day:
+        try:
+            freed = await slot_service.get_free_slots(
+                session,
+                professor_id=wl.professor_id,
+                course_id=wl.course_id,
+                ctype=wl.consultation_type,
+                group_size=1,
+                student_id=wl.student_id,
+                next_weeks=5,
+            )
+        except ValueError:
+            continue
+        if not any(s.session_date == wl.preferred_date for s in freed):
+            continue
+        await notification_service.notify_user(
+            session,
+            wl.student_id,
+            f"A booking slot opened on {wl.preferred_date.isoformat()} with your professor. "
+            "Open the booking chat or My Bookings to reserve it.",
+            notification_type="waitlist",
+            link="/student/chat",
+        )
+        await session.delete(wl)
+        await session.flush()
 
 
 async def feedback_check(session: AsyncSession) -> None:

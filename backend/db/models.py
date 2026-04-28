@@ -10,11 +10,13 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     Time,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -68,6 +70,11 @@ class AcademicEventType(str, enum.Enum):
     exam = "EXAM"
 
 
+class ExamRegistrationStatus(str, enum.Enum):
+    registered = "REGISTERED"
+    cancelled = "CANCELLED"
+
+
 class BookingStatus(str, enum.Enum):
     active = "ACTIVE"
     waitlist = "WAITLIST"
@@ -101,6 +108,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     student_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
+    study_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     is_final_year: Mapped[bool] = mapped_column(Boolean, default=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     one_time_password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -226,6 +234,31 @@ class AcademicEvent(Base):
     event_type: Mapped[AcademicEventType] = mapped_column(Enum(AcademicEventType), nullable=False)
     event_date: Mapped[date] = mapped_column("date", Date, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    time_from: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    time_to: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    hall: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    exam_period_id: Mapped[Optional[int]] = mapped_column(ForeignKey("exam_periods.id"), nullable=True)
+    academic_year: Mapped[str] = mapped_column(String(32), nullable=False, default="2025/2026")
+
+
+class ExamRegistration(Base):
+    __tablename__ = "exam_registrations"
+    __table_args__ = (
+        UniqueConstraint("student_id", "academic_event_id", name="uq_exam_reg_student_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    academic_event_id: Mapped[int] = mapped_column(ForeignKey("academic_events.id"), nullable=False)
+    status: Mapped[ExamRegistrationStatus] = mapped_column(
+        Enum(ExamRegistrationStatus, values_callable=lambda x: [i.value for i in x]),
+        nullable=False,
+        default=ExamRegistrationStatus.registered,
+    )
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ConsultationSession(Base):
@@ -250,15 +283,27 @@ class ConsultationSession(Base):
 
 class Booking(Base):
     __tablename__ = "bookings"
+    __table_args__ = (
+        Index(
+            "uq_bookings_student_session_active",
+            "student_id",
+            "session_id",
+            unique=True,
+            sqlite_where=text("status = 'ACTIVE'"),
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     session_id: Mapped[int] = mapped_column(ForeignKey("consultation_sessions.id"), nullable=False)
     task: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     anonymous_question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
     group_size: Mapped[int] = mapped_column(Integer, default=1)
-    status: Mapped[BookingStatus] = mapped_column(Enum(BookingStatus), default=BookingStatus.active)
+    status: Mapped[BookingStatus] = mapped_column(
+        Enum(BookingStatus, values_callable=lambda x: [i.value for i in x]),
+        default=BookingStatus.active,
+    )
     priority: Mapped[BookingPriority] = mapped_column(Enum(BookingPriority), default=BookingPriority.normal)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -300,6 +345,7 @@ class Waitlist(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     position_hint: Mapped[int] = mapped_column(Integer, default=0)
+    any_slot_on_day: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Notification(Base):
@@ -318,6 +364,7 @@ class Notification(Base):
 
 class Feedback(Base):
     __tablename__ = "feedbacks"
+    __table_args__ = (UniqueConstraint("booking_id", name="uq_feedbacks_booking_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False)
@@ -400,6 +447,12 @@ class Conversation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     state: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
 
 
 class ProfessorAnnouncement(Base):

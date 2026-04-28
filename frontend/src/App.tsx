@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
+import { StudentChatShell } from './components/StudentChatShell'
 import { useAuth } from './contexts/AuthContext'
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
@@ -8,18 +9,22 @@ import Privacy from './pages/Privacy'
 import StudentDashboard from './pages/student/Dashboard'
 import Chat from './pages/student/Chat'
 import MyBookings from './pages/student/MyBookings'
+import StudentExams from './pages/student/Exams'
+import Subjects from './pages/student/Subjects'
 import Professors from './pages/student/Professors'
 import Thesis from './pages/student/Thesis'
 import Waitlist from './pages/student/Waitlist'
+import Calendar from './pages/Calendar'
 import ProfessorDashboard from './pages/professor/Dashboard'
 import ProfessorWindows from './pages/professor/Windows'
 import ProfessorBookings from './pages/professor/Bookings'
 import ProfessorRequests from './pages/professor/Requests'
 import ThesisApplications from './pages/professor/ThesisApplications'
 import ProfessorStats from './pages/professor/Stats'
+import ProfessorExams from './pages/professor/Exams'
 import AdminDashboard from './pages/admin/Dashboard'
 import AdminUsers from './pages/admin/Users'
-import AdminScheduler from './pages/admin/SchedulerLog'
+import AdminAcademicSchedule from './pages/admin/AcademicSchedule'
 
 function RequireAuth({
   allowPasswordChange,
@@ -43,17 +48,20 @@ function RoleGate({ role, children }: { role: 'student' | 'professor' | 'admin';
 
 const studentNav = [
   { to: '/student', label: 'Home' },
-  { to: '/student/chat', label: 'Chat' },
   { to: '/student/bookings', label: 'Bookings' },
-  { to: '/student/professors', label: 'Professors' },
+  { to: '/student/exams', label: 'Exams' },
+  { to: '/student/calendar', label: 'Calendar' },
+  { to: '/student/subjects', label: 'Subjects' },
   { to: '/student/thesis', label: 'Thesis' },
   { to: '/student/waitlist', label: 'Waitlist' },
 ]
 
 const profNav = [
   { to: '/professor', label: 'Home' },
-  { to: '/professor/windows', label: 'Windows' },
+  { to: '/professor/windows', label: 'Consultation hours' },
   { to: '/professor/bookings', label: 'Bookings' },
+  { to: '/professor/exams', label: 'Exams' },
+  { to: '/professor/calendar', label: 'Calendar' },
   { to: '/professor/requests', label: 'Requests' },
   { to: '/professor/thesis', label: 'Thesis apps' },
   { to: '/professor/stats', label: 'Stats' },
@@ -62,7 +70,7 @@ const profNav = [
 const adminNav = [
   { to: '/admin', label: 'Home' },
   { to: '/admin/users', label: 'Users' },
-  { to: '/admin/scheduler', label: 'Scheduler' },
+  { to: '/admin/academic', label: 'Academic' },
 ]
 
 function HomeRedirect() {
@@ -101,7 +109,9 @@ export default function App() {
         element={
           <RequireAuth>
             <RoleGate role="student">
-              <AppLayout nav={studentNav} />
+              <StudentChatShell>
+                <AppLayout nav={studentNav} />
+              </StudentChatShell>
             </RoleGate>
           </RequireAuth>
         }
@@ -109,6 +119,9 @@ export default function App() {
         <Route index element={<StudentDashboard />} />
         <Route path="chat" element={<Chat />} />
         <Route path="bookings" element={<MyBookings />} />
+        <Route path="exams" element={<StudentExams />} />
+        <Route path="calendar" element={<Calendar />} />
+        <Route path="subjects" element={<Subjects />} />
         <Route path="professors" element={<Professors />} />
         <Route path="thesis" element={<Thesis />} />
         <Route path="waitlist" element={<Waitlist />} />
@@ -126,9 +139,11 @@ export default function App() {
         <Route index element={<ProfessorDashboard />} />
         <Route path="windows" element={<ProfessorWindows />} />
         <Route path="bookings" element={<ProfessorBookings />} />
+        <Route path="calendar" element={<Calendar />} />
         <Route path="requests" element={<ProfessorRequests />} />
         <Route path="thesis" element={<ThesisApplications />} />
         <Route path="stats" element={<ProfessorStats />} />
+        <Route path="exams" element={<ProfessorExams />} />
       </Route>
       <Route
         path="/admin"
@@ -142,7 +157,7 @@ export default function App() {
       >
         <Route index element={<AdminDashboard />} />
         <Route path="users" element={<AdminUsers />} />
-        <Route path="scheduler" element={<AdminScheduler />} />
+        <Route path="academic" element={<AdminAcademicSchedule />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

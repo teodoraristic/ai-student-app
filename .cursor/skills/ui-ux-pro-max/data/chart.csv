@@ -1,0 +1,7 @@
+chart_type,keywords,use_for,libraries,notes
+Line,"trend,time series,kpi",Trends over time,Recharts Chart.js Victory,Mark points; reduce ticks mobile
+Bar,"compare,category",Categorical comparison,Recharts Nivo,Horizontal bars on small screens
+Donut,"proportion,share",Part-of-whole ≤5 categories,Recharts,Provide table summary a11y
+Funnel,"funnel,conversion",Stage drop-off,Funnel libs / custom,Label absolute + %
+Heatmap,"heatmap,matrix",Correlation / grids,Nivo,Mind colorblind palettes
+Scatter,"scatter,correlation",Relationships,D3 / Observable,Explain outliers

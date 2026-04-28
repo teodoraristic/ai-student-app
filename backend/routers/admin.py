@@ -1,10 +1,10 @@
 """Admin / staff endpoints."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,17 +29,28 @@ from backend.db.models import (
     UserRole,
 )
 from backend.middleware.auth_middleware import require_role
-from backend.services import admin_service, notification_service
+from backend.services import admin_service, exam_service, notification_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 class CreateUserBody(BaseModel):
     email: EmailStr
-    first_name: str
-    last_name: str
+    first_name: str = Field(min_length=1, max_length=120)
+    last_name: str = Field(min_length=1, max_length=120)
     role: UserRole
-    student_number: Optional[str] = None
+    student_number: Optional[str] = Field(None, max_length=64)
+    """Undergraduate / combined study year (1–6). Required when role is student."""
+    study_year: Optional[int] = Field(None, ge=1, le=6)
+
+    @model_validator(mode="after")
+    def student_study_year(self) -> "CreateUserBody":
+        if self.role == UserRole.student:
+            if self.study_year is None:
+                raise ValueError("study_year is required for students (1–6)")
+        else:
+            self.study_year = None
+        return self
 
 
 @router.get("/users")
@@ -57,6 +68,8 @@ async def list_users(
             "role": u.role.value,
             "is_active": u.is_active,
             "password_change_required": u.password_change_required,
+            "study_year": u.study_year,
+            "is_final_year": u.is_final_year,
         }
         for u in rows
     ]
@@ -76,6 +89,7 @@ async def create_user_admin(
             last_name=body.last_name,
             role=body.role,
             student_number=body.student_number,
+            study_year=body.study_year,
             created_by=admin,
         )
         await db.commit()
@@ -89,6 +103,8 @@ async def create_user_admin(
             "last_name": user.last_name,
             "role": user.role.value,
             "password_change_required": user.password_change_required,
+            "study_year": user.study_year,
+            "is_final_year": user.is_final_year,
         },
         "one_time_password": otp,
     }
@@ -215,6 +231,11 @@ async def list_events(
             "type": r.event_type.value,
             "date": r.event_date.isoformat(),
             "name": r.name,
+            "academic_year": r.academic_year,
+            "time_from": r.time_from.isoformat() if r.time_from else None,
+            "time_to": r.time_to.isoformat() if r.time_to else None,
+            "hall": r.hall,
+            "exam_period_id": r.exam_period_id,
         }
         for r in rows
     ]
@@ -225,6 +246,11 @@ class EventBody(BaseModel):
     type: AcademicEventType
     date: date
     name: str = Field(max_length=255)
+    academic_year: str = "2025/2026"
+    time_from: Optional[time] = None
+    time_to: Optional[time] = None
+    hall: Optional[str] = None
+    exam_period_id: Optional[int] = None
 
 
 @router.post("/events")
@@ -233,15 +259,60 @@ async def add_event(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin)),
 ):
+    ep_id = None if body.type == AcademicEventType.midterm else body.exam_period_id
+    try:
+        await exam_service.validate_academic_event_fields(
+            db,
+            event_type=body.type,
+            event_date=body.date,
+            exam_period_id=ep_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     e = AcademicEvent(
         course_id=body.course_id,
         event_type=body.type,
         event_date=body.date,
         name=body.name,
+        academic_year=body.academic_year,
+        time_from=body.time_from,
+        time_to=body.time_to,
+        hall=body.hall,
+        exam_period_id=ep_id,
     )
     db.add(e)
     await db.commit()
     return {"id": e.id}
+
+
+class EventPatch(BaseModel):
+    course_id: Optional[int] = None
+    type: Optional[AcademicEventType] = None
+    date: Optional[date] = None
+    name: Optional[str] = Field(default=None, max_length=255)
+    academic_year: Optional[str] = None
+    time_from: Optional[time] = None
+    time_to: Optional[time] = None
+    hall: Optional[str] = None
+    exam_period_id: Optional[int] = None
+    clear_exam_period: bool = False
+
+
+@router.patch("/events/{event_id}")
+async def patch_event(
+    event_id: int,
+    body: EventPatch,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin)),
+):
+    raw = body.model_dump(exclude_unset=True)
+    clear = bool(raw.pop("clear_exam_period", False))
+    try:
+        await exam_service.patch_academic_event(db, event_id, raw, clear_exam_period=clear)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
 
 
 @router.delete("/events/{event_id}")
@@ -544,6 +615,15 @@ async def sched_run(
 class CourseCreateBody(BaseModel):
     name: str
     code: str
+
+
+@router.get("/courses")
+async def list_courses(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin)),
+):
+    rows = list((await db.scalars(select(Course).order_by(Course.code))).all())
+    return [{"id": c.id, "name": c.name, "code": c.code, "semester": c.semester.value} for c in rows]
 
 
 @router.post("/courses")

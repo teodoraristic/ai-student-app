@@ -1,0 +1,4 @@
+topic,keywords,tips
+reactivity,"stores,writable",Keep stores domain-scoped; avoid mega-store
+motion,"svelte,transition",Use transitions; respect reduced motion
+a11y,"svelte,a11y",svelte:elements bindings; focus management on route change

@@ -1,0 +1,40 @@
+cd c:\Users\teodo\Desktop\levi9\student-app
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000  
+
+
+Backend
+Python · FastAPI (REST API, OpenAPI/Swagger dokumentacija: /docs, /redoc)
+Uvicorn (ASGI server)
+SQLAlchemy 2 (async) + asyncpg · PostgreSQL
+Alembic (verzionisane migracije šeme baze)
+Pydantic + Pydantic Settings (validacija, konfiguracija iz .env)
+JWT (python-jose, algoritam HS256) · HTTP Bearer preko FastAPI Security
+bcrypt / passlib (heširanje lozinki)
+httpx (asinkroni HTTP, npr. SendGrid API)
+
+Frontend
+React 19 · TypeScript
+Vite 8 (build i dev server)
+React Router (klijentsko rutiranje)
+Tailwind CSS 4 + @tailwindcss/vite
+Axios (HTTP klijent, interceptor za JWT i 401 redirect)
+React Context API (npr. autentifikacija, layout, chat)
+localStorage za token
+Vite proxy (/api → backend) u developmentu
+
+Baza i okruženje
+PostgreSQL 16 (Alpine image, volume za podatke, healthcheck)
+
+Testiranje i kvalitet
+pytest + pytest-asyncio
+aiosqlite (async test baza)
+ESLint + TypeScript ESLint (frontend lint)
+
+Arhitekturne tehnike / obrasci
+Slojevitost: rute (routers) → servisi → ORM modeli · Pydantic šeme za ulaz/izlaz
+Uloge korisnika (student / profesor / admin) i RBAC preko FastAPI zavisnosti
+Dependency injection (Depends, Annotated)
+Asinkroni životni ciklus aplikacije (lifespan): migracije + seed podataka
+Audit log (middleware) · in-app notifikacije
+Chatbot: rule-based (ključne reči, regex, difflib — nije spoljni LLM)
+Rate limiting na login (jednostavna serverska kontrola u auth ruti)

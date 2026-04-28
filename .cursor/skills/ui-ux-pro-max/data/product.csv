@@ -1,0 +1,9 @@
+category,keywords,pattern,recommendation,pitfalls
+SaaS,"saas,subscription,dashboard,admin,b2b",Multi-tenant clarity; settings depth,Sidebar + topbar; searchable tables; role-aware empty states,Feature walls without explanation
+E-commerce,"shop,store,catalog,pdp,cart,checkout",Conversion-first PDP,Trust badges; reviews; sticky CTA; size/stock clarity,Cluttered checkout; surprise costs
+Healthcare,"clinic,patient,emr,health",Safety + legibility,High contrast; stepwise forms; confirm destructive,Low-contrast gray body text
+Portfolio,"portfolio,creative,agency",Expressive hero + case studies,Editorial grids; motion with reduced-motion guard,Autoplay heavy video hero
+Blog,"blog,article,cms,publisher",Readable measure + hierarchy,TOC; serif/sans pairing; code blocks styled,Ads breaking reading rhythm
+Landing,"landing,marketing,lead",Single CTA focus + proof,Hero + social proof + FAQ; one primary CTA,Competing CTAs above fold
+Admin,"admin,internal,ops",Density with clarity,Keyboard table nav; bulk actions; audit trails,Cryptic column labels
+Mobile app,"ios,android,app,mobile",OS-native patterns where possible,Bottom sheets; large targets; system type scale,Desktop patterns shrunken

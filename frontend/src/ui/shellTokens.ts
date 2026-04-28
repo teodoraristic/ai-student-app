@@ -1,15 +1,22 @@
 import type { CSSProperties } from 'react'
 
-/** Shared app shell: student + professor areas (navy / slate / amber). */
+/** Shared app shell — same palette and rhythm as student pages (Dashboard, MyBookings, Thesis). */
 export const shell: CSSProperties = { fontFamily: "'Segoe UI', system-ui, sans-serif" }
 
-export const pageHeader: CSSProperties = { marginBottom: '1.5rem' }
+export const pageHeader: CSSProperties = { marginBottom: '1.25rem' }
 
+/** Default page title (matches student subpages e.g. MyBookings, Thesis). */
 export const title: CSSProperties = {
   fontSize: '1.4rem',
   fontWeight: 700,
   color: '#0f1f3d',
   margin: 0,
+}
+
+/** Home-style greeting (matches student Dashboard hero line). */
+export const titleHome: CSSProperties = {
+  ...title,
+  fontSize: '1.5rem',
 }
 
 export const subtitle: CSSProperties = {
@@ -18,11 +25,17 @@ export const subtitle: CSSProperties = {
   margin: '0.2rem 0 0 0',
 }
 
+/** Section heading inside a page (matches student Dashboard / MyBookings `h2`). */
 export const sectionTitle: CSSProperties = {
-  fontSize: '1rem',
+  fontSize: '0.95rem',
   fontWeight: 600,
   color: '#0f1f3d',
-  margin: '0 0 0.75rem 0',
+  margin: '0 0 0.5rem 0',
+}
+
+/** Standard vertical spacing between major sections on a page. */
+export const sectionBlock: CSSProperties = {
+  marginBottom: '1.5rem',
 }
 
 export const meta: CSSProperties = {
@@ -38,7 +51,15 @@ export const card: CSSProperties = {
   background: '#fff',
   border: '1px solid #e8ecf0',
   borderRadius: 12,
-  padding: '1rem 1.2rem',
+  padding: '0.85rem 1rem',
+  minWidth: 0,
+}
+
+/** Responsive card grid — same as student MyBookings. */
+export const cardGrid: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+  gap: '1rem',
 }
 
 export const cardMuted: CSSProperties = {
@@ -53,6 +74,7 @@ export const emptyState: CSSProperties = {
   border: '1px dashed #d1d9e6',
   borderRadius: 10,
   padding: '1rem 1.1rem',
+  marginBottom: '1rem',
   fontSize: '0.875rem',
   color: '#6b7ea8',
 }
@@ -80,14 +102,15 @@ export const btnPrimary: CSSProperties = {
 }
 
 export const btnSecondary: CSSProperties = {
-  padding: '0.45rem 0.95rem',
+  padding: '0.45rem 0.85rem',
   borderRadius: 8,
   border: '1px solid #d1d9e6',
   background: '#fff',
   color: '#4d6080',
-  fontSize: '0.82rem',
+  fontSize: '0.8rem',
   fontWeight: 500,
   cursor: 'pointer',
+  transition: 'border-color 0.1s',
 }
 
 export const btnAccent: CSSProperties = {

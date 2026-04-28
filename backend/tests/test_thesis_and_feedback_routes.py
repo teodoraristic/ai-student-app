@@ -2,7 +2,7 @@
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.db.models import (
     Booking,
@@ -19,8 +19,9 @@ from backend.db.models import (
 from backend.routers.professor import ThesisRespond, thesis_respond
 from backend.routers.shared import FeedbackBody, post_feedback
 from backend.routers.student import ThesisApplyBody, thesis_apply, thesis_cancel, thesis_my
+from backend.services import thesis_service
 
-from .conftest import _user, future_session
+from .conftest import _user, active_booking, future_session
 
 
 class TestThesisLifecycle:
@@ -134,6 +135,35 @@ class TestThesisLifecycle:
         assert payload["professor_id"] == professor.id
         assert payload["status"] == ThesisApplicationStatus.active.value
 
+    async def test_thesis_consultation_history_empty_without_active_supervision(self, db, student, professor, enrolled):
+        rows = await thesis_service.list_thesis_consultation_history(db, student)
+        assert rows == []
+
+    async def test_thesis_consultation_history_lists_mentor_thesis_bookings_only(
+        self, db, student, professor, course, enrolled
+    ):
+        app = ThesisApplication(
+            student_id=student.id,
+            professor_id=professor.id,
+            topic_description="Edge ML",
+            status=ThesisApplicationStatus.active,
+        )
+        db.add(app)
+        student.thesis_professor_id = professor.id
+        thesis_cs = future_session(professor.id, course.id, ConsultationType.thesis)
+        general_cs = future_session(professor.id, course.id, ConsultationType.general, days_ahead=5)
+        db.add(thesis_cs)
+        db.add(general_cs)
+        await db.flush()
+        db.add(active_booking(student.id, thesis_cs.id))
+        db.add(active_booking(student.id, general_cs.id))
+        await db.flush()
+
+        rows = await thesis_service.list_thesis_consultation_history(db, student)
+        assert len(rows) == 1
+        assert rows[0]["consultation_type"] == "THESIS"
+        assert rows[0]["session_id"] == thesis_cs.id
+
 
 class TestFeedbackRules:
     async def test_feedback_requires_attended_booking(self, db, student, professor, course, enrolled):
@@ -159,6 +189,28 @@ class TestFeedbackRules:
 
         saved = await db.scalar(select(Feedback).where(Feedback.booking_id == booking.id))
         assert saved is None
+
+    async def test_feedback_duplicate_submission_returns_400(self, db, student, professor, course, enrolled):
+        cs = future_session(professor.id, course.id, ConsultationType.general)
+        db.add(cs)
+        await db.flush()
+        booking = Booking(
+            student_id=student.id,
+            session_id=cs.id,
+            status=BookingStatus.attended,
+            group_size=1,
+        )
+        db.add(booking)
+        await db.flush()
+
+        body = FeedbackBody(rating=4, comment="ok")
+        await post_feedback(booking_id=booking.id, body=body, db=db, user=student)
+
+        with pytest.raises(HTTPException, match="Already submitted"):
+            await post_feedback(booking_id=booking.id, body=FeedbackBody(rating=5, comment="again"), db=db, user=student)
+
+        count = await db.scalar(select(func.count()).select_from(Feedback).where(Feedback.booking_id == booking.id))
+        assert int(count or 0) == 1
 
 
 class TestProfessorHall:

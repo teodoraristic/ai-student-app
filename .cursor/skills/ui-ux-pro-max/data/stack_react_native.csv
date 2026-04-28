@@ -1,0 +1,5 @@
+topic,keywords,tips
+lists,"flatlist,virtualization",FlatList windowing; avoid ScrollView huge children
+safe-area,"safe area,insets",Use SafeAreaView / padding insets for fixed chrome
+pressable,"pressable,hitSlop",Expand hit areas; show pressed feedback quickly
+navigation,"react navigation,stack",Deep linking config; predictable back stack

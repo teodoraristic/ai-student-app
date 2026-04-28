@@ -8,7 +8,9 @@ export default function Stats() {
         <h1 style={U.title}>Statistics</h1>
         <p style={U.subtitle}>Workload trends and feedback summaries (post-MVP).</p>
       </div>
-      <ComingSoon feature="Advanced analytics and predictive model" />
+      <section style={U.sectionBlock}>
+        <ComingSoon feature="Advanced analytics and predictive model" />
+      </section>
     </div>
   )
 }

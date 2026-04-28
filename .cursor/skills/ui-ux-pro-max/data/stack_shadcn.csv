@@ -1,0 +1,4 @@
+topic,keywords,tips
+composition,"radix,shadcn,cva",Use variants; do not fork primitives unnecessarily
+a11y,"radix,focus",Keep Radix defaults; test keyboard for dialogs/sheets
+theming,"css variables,tokens",Align with global CSS variables; dark mode class strategy

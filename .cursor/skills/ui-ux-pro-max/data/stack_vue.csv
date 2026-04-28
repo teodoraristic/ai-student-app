@@ -1,0 +1,4 @@
+topic,keywords,tips
+composition,"composable,slots",Prefer composables for shared UI logic
+sfc,"sfc,scoped",Scoped CSS or CSS modules for encapsulation
+a11y,"vue,a11y",Use native elements; aria on interactive components

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3)",
+      "Bash(2>&1)",
+      "Bash(python -m uvicorn backend.main:app --port 8001)",
+      "Bash(python -m uvicorn backend.main:app --port 8000)",
+      "Read(//tmp/**)",
+      "Bash(git commit -m ' *)",
+      "Bash(git remote *)",
+      "Bash(git config *)",
+      "Bash(git push *)"
+    ]
+  }
+}

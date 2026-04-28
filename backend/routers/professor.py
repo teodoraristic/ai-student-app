@@ -1,13 +1,17 @@
 """Professor endpoints."""
 
+import logging
+from collections import defaultdict
 from datetime import UTC, date, datetime, time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.dates import utc_today
 from backend.db.base import get_db
 from backend.db.models import (
     AcademicEvent,
@@ -20,9 +24,11 @@ from backend.db.models import (
     Course,
     CourseProfessor,
     CourseStudent,
+    CourseStudentStatus,
     ExtraSlot,
     ProfessorAnnouncement,
     ProfessorProfile,
+    PreparationVote,
     SchedulingRequest,
     SchedulingRequestStatus,
     SessionFormat,
@@ -34,9 +40,65 @@ from backend.db.models import (
     WindowType,
 )
 from backend.middleware.auth_middleware import require_role
-from backend.services import config_service, notification_service, thesis_service
+from backend.services import (
+    booking_service,
+    config_service,
+    exam_service,
+    notification_service,
+    scheduling_service,
+    thesis_service,
+)
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/professor", tags=["professor"])
+
+_PROFESSOR_BOOKING_STATUS_EDGES: dict[BookingStatus, frozenset[BookingStatus]] = {
+    BookingStatus.active: frozenset(
+        {BookingStatus.attended, BookingStatus.no_show, BookingStatus.cancelled}
+    ),
+}
+
+
+async def _students_for_professor_course_notification(
+    db: AsyncSession,
+    *,
+    professor_id: int,
+    course_id: int,
+) -> list[User]:
+    """Students actively enrolled in ``course_id`` for an academic year this professor teaches; 403 if none."""
+    cps = list(
+        (
+            await db.scalars(
+                select(CourseProfessor).where(
+                    CourseProfessor.professor_id == professor_id,
+                    CourseProfessor.course_id == course_id,
+                )
+            )
+        ).all()
+    )
+    if not cps:
+        raise HTTPException(status_code=403, detail="You don't teach this course")
+    years = {cp.academic_year for cp in cps}
+    student_ids = list(
+        (
+            await db.scalars(
+                select(CourseStudent.student_id).where(
+                    CourseStudent.course_id == course_id,
+                    CourseStudent.academic_year.in_(years),
+                    CourseStudent.status == CourseStudentStatus.active,
+                ).distinct()
+            )
+        ).all()
+    )
+    if not student_ids:
+        return []
+    return list(
+        (
+            await db.scalars(
+                select(User).where(User.id.in_(student_ids), User.role == UserRole.student)
+            )
+        ).all()
+    )
 
 
 class ProfilePatch(BaseModel):
@@ -98,20 +160,14 @@ async def create_announcement(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
-    # Verify professor teaches the course
-    cp = await db.scalar(
-        select(CourseProfessor).where(
-            CourseProfessor.professor_id == user.id,
-            CourseProfessor.course_id == body.course_id,
-        )
-    )
-    if not cp:
-        raise HTTPException(status_code=403, detail="You don't teach this course")
-
     if body.academic_event_id:
         event = await db.get(AcademicEvent, body.academic_event_id)
         if not event or event.course_id != body.course_id:
             raise HTTPException(status_code=400, detail="Invalid academic event")
+
+    students = await _students_for_professor_course_notification(
+        db, professor_id=user.id, course_id=body.course_id
+    )
 
     ann = ProfessorAnnouncement(
         professor_id=user.id,
@@ -125,20 +181,13 @@ async def create_announcement(
     db.add(ann)
     await db.flush()
 
-    # Notify students in the course
-    students = await db.scalars(
-        select(User).join(CourseStudent, CourseStudent.student_id == User.id).where(
-            CourseStudent.course_id == body.course_id,
-            User.role == UserRole.student,
-        )
-    )
     for student in students:
         await notification_service.notify_user(
             db,
             student.id,
             f"New announcement from {user.first_name} {user.last_name}: {body.title}",
             notification_type="announcement",
-            link=f"/student/announcements",  # or something
+            link="/student/exams",
         )
 
     await db.commit()
@@ -178,12 +227,14 @@ async def add_window(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
+    slot_duration = 60 if body.type == WindowType.thesis else 15
     w = ConsultationWindow(
         professor_id=user.id,
         day_of_week=body.day_of_week.lower(),
         time_from=body.time_from,
         time_to=body.time_to,
         window_type=body.type,
+        slot_duration_minutes=slot_duration,
     )
     db.add(w)
     await db.commit()
@@ -306,12 +357,15 @@ async def add_extra(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
+    extra_wtype = WindowType.thesis if body.type == ConsultationType.thesis else WindowType.regular
+    extra_slot_mins = 60 if body.type == ConsultationType.thesis else 15
     e = ExtraSlot(
         professor_id=user.id,
         slot_date=body.date,
         time_from=body.time_from,
         time_to=body.time_to,
-        slot_type=body.type,
+        slot_type=extra_wtype,
+        slot_duration_minutes=extra_slot_mins,
     )
     db.add(e)
     await db.flush()
@@ -363,12 +417,59 @@ async def scheduling_requests(
     rows = list(
         (await db.scalars(select(SchedulingRequest).where(SchedulingRequest.professor_id == user.id))).all()
     )
-    return [{"id": r.id, "course_id": r.course_id, "vote_count": r.vote_count, "status": r.status.value} for r in rows]
+    event_ids = [r.academic_event_id for r in rows]
+    votes_by_event: defaultdict[int, list[PreparationVote]] = defaultdict(list)
+    if event_ids:
+        vote_rows = list(
+            (
+                await db.scalars(
+                    select(PreparationVote).where(PreparationVote.academic_event_id.in_(event_ids))
+                )
+            ).all()
+        )
+        for v in vote_rows:
+            votes_by_event[v.academic_event_id].append(v)
+
+    out = []
+    for r in rows:
+        course = await db.get(Course, r.course_id)
+        event = await db.get(AcademicEvent, r.academic_event_id)
+        hints = scheduling_service.collect_vote_time_hints(votes_by_event.get(r.academic_event_id, []))
+        out.append(
+            {
+                "id": r.id,
+                "course_id": r.course_id,
+                "course_code": course.code if course else None,
+                "course_name": course.name if course else None,
+                "academic_event_id": r.academic_event_id,
+                "event_name": event.name if event else None,
+                "event_date": event.event_date.isoformat() if event else None,
+                "event_type": event.event_type.value if event else None,
+                "vote_count": r.vote_count,
+                "status": r.status.value,
+                "deadline_at": r.deadline_at.isoformat(),
+                "created_at": r.created_at.isoformat(),
+                "student_time_preferences": hints,
+            }
+        )
+    return out
 
 
 class RequestRespond(BaseModel):
     accept: bool
     session_id: Optional[int] = None
+    slot_date: Optional[date] = None
+    time_from: Optional[time] = None
+    time_to: Optional[time] = None
+
+    @model_validator(mode="after")
+    def accept_requires_slot_or_session(self):
+        if self.accept and self.session_id is None:
+            if self.slot_date is None or self.time_from is None or self.time_to is None:
+                raise ValueError(
+                    "When accepting, provide either session_id or slot_date, time_from, and time_to"
+                )
+        return self
 
 
 @router.post("/requests/{request_id}/respond")
@@ -378,13 +479,24 @@ async def respond_request(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
-    r = await db.get(SchedulingRequest, request_id)
-    if not r or r.professor_id != user.id:
-        raise HTTPException(status_code=404)
-    r.status = SchedulingRequestStatus.accepted if body.accept else SchedulingRequestStatus.declined
-    r.session_id = body.session_id
-    await db.commit()
-    return {"ok": True}
+    try:
+        _r, cs = await scheduling_service.respond_preparation_request(
+            db,
+            professor=user,
+            request_id=request_id,
+            accept=body.accept,
+            session_id=body.session_id,
+            slot_date=body.slot_date,
+            time_from=body.time_from,
+            time_to=body.time_to,
+        )
+        await db.commit()
+    except ValueError as e:
+        await db.rollback()
+        msg = str(e)
+        code = 404 if msg == "Request not found" else 400
+        raise HTTPException(status_code=code, detail=msg)
+    return {"ok": True, "session_id": cs.id if cs else None}
 
 
 @router.get("/thesis-applications")
@@ -392,7 +504,7 @@ async def thesis_inbox(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
-    rows = list(
+    pending_rows = list(
         (
             await db.scalars(
                 select(ThesisApplication).where(
@@ -402,17 +514,37 @@ async def thesis_inbox(
             )
         ).all()
     )
-    out = []
-    for t in rows:
+    mentee_rows = list(
+        (
+            await db.scalars(
+                select(ThesisApplication).where(
+                    ThesisApplication.professor_id == user.id,
+                    ThesisApplication.status == ThesisApplicationStatus.active,
+                )
+            )
+        ).all()
+    )
+    pending_out = []
+    for t in pending_rows:
         st = await db.get(User, t.student_id)
-        out.append(
+        pending_out.append(
             {
                 "id": t.id,
                 "student_name": f"{st.first_name} {st.last_name}" if st else "",
                 "topic_description": t.topic_description,
             }
         )
-    return out
+    mentees_out = []
+    for t in mentee_rows:
+        st = await db.get(User, t.student_id)
+        mentees_out.append(
+            {
+                "application_id": t.id,
+                "student_name": f"{st.first_name} {st.last_name}" if st else "",
+                "topic_description": t.topic_description,
+            }
+        )
+    return {"pending": pending_out, "mentees": mentees_out}
 
 
 class ThesisRespond(BaseModel):
@@ -503,37 +635,105 @@ async def prof_bookings(
 ):
     q = select(ConsultationSession).where(ConsultationSession.professor_id == user.id)
     if upcoming:
-        q = q.where(ConsultationSession.session_date >= date.today())
+        q = q.where(ConsultationSession.session_date >= utc_today()).order_by(
+            ConsultationSession.session_date,
+            ConsultationSession.time_from,
+            ConsultationSession.id,
+        )
+    else:
+        q = q.where(ConsultationSession.session_date < utc_today()).order_by(
+            ConsultationSession.session_date.desc(),
+            ConsultationSession.time_from.desc(),
+            ConsultationSession.id.desc(),
+        )
     sessions = list((await db.scalars(q)).all())
     sid = [s.id for s in sessions]
     session_map = {s.id: s for s in sessions}
     if not sid:
-        return {"grouped": {}}
+        return {"sessions": []}
+    profile = await db.scalar(select(ProfessorProfile).where(ProfessorProfile.user_id == user.id))
+    hall = ""
+    if profile:
+        hall = (profile.hall or "").strip() or (profile.default_room or "").strip()
+    course_ids = {s.course_id for s in sessions if s.course_id}
+    course_by_id: dict[int, tuple[str, str]] = {}
+    for cid in course_ids:
+        co = await db.get(Course, cid)
+        if co:
+            course_by_id[cid] = (co.code, co.name)
     bookings = list(
         (await db.scalars(select(Booking).where(Booking.session_id.in_(tuple(sid))))).all()
     )
-    grouped: dict[str, list] = {}
+    by_session: dict[int, list[Booking]] = defaultdict(list)
     for b in bookings:
-        cs = session_map.get(b.session_id)
-        ctype = cs.consultation_type if cs else None
-        show_name = ctype in (ConsultationType.graded_work_review, ConsultationType.thesis)
-        student_name = None
-        if show_name:
+        by_session[b.session_id].append(b)
+
+    out: list[dict] = []
+    for session_id, blist in by_session.items():
+        cs = session_map.get(session_id)
+        if not cs:
+            continue
+        ctype = cs.consultation_type
+        course_code = course_name = None
+        if cs.course_id and cs.course_id in course_by_id:
+            course_code, course_name = course_by_id[cs.course_id]
+        booking_rows: list[dict] = []
+        for b in blist:
             st = await db.get(User, b.student_id)
             student_name = f"{st.first_name} {st.last_name}" if st else None
-        key = f"{cs.session_date} {cs.time_from} ({ctype.value if ctype else ''})" if cs else "Unknown"
-        grouped.setdefault(key, []).append(
+            booking_rows.append(
+                {
+                    "id": b.id,
+                    "student_name": student_name,
+                    "group_size": b.group_size,
+                    "status": b.status.value,
+                    "task": b.task,
+                }
+            )
+        total_party = sum(
+            max(1, int(b.group_size or 1))
+            for b in blist
+            if b.status != BookingStatus.cancelled
+        )
+        out.append(
             {
-                "id": b.id,
-                "student_name": student_name,
-                "anonymous_question": b.anonymous_question,
-                "group_size": b.group_size,
-                "is_urgent": b.is_urgent,
-                "status": b.status.value,
-                "task": b.task,
+                "session_id": cs.id,
+                "session_date": cs.session_date.isoformat(),
+                "time_from": cs.time_from.isoformat(),
+                "time_to": cs.time_to.isoformat(),
+                "consultation_type": ctype.value,
+                "course_code": course_code,
+                "course_name": course_name,
+                "hall": hall or None,
+                "session_party_total": total_party,
+                "session_booking_count": len(blist),
+                "bookings": booking_rows,
             }
         )
-    return {"grouped": grouped}
+    out.sort(key=lambda x: (x["session_date"], x["time_from"]), reverse=not upcoming)
+    out = booking_service.merge_professor_slot_cards_for_same_timeslot(out)
+    return {"sessions": out}
+
+
+@router.get("/announced-preparations")
+async def professor_announced_preparations(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.professor)),
+):
+    return await booking_service.list_professor_announced_preparation_overview(db, user.id)
+
+
+@router.get("/bookings/calendar")
+async def professor_bookings_calendar(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.professor)),
+):
+    try:
+        return await booking_service.list_calendar_bookings(db, user, year=year, month=month)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 class BookingStatusPatch(BaseModel):
@@ -553,7 +753,14 @@ async def patch_booking_status(
     cs = await db.get(ConsultationSession, b.session_id)
     if not cs or cs.professor_id != user.id:
         raise HTTPException(status_code=403)
-    b.status = body.status
+    if b.status != body.status:
+        allowed = _PROFESSOR_BOOKING_STATUS_EDGES.get(b.status)
+        if not allowed or body.status not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status transition from {b.status.value} to {body.status.value}",
+            )
+        b.status = body.status
     await db.commit()
     return {"ok": True}
 
@@ -572,6 +779,9 @@ async def announce_preparation(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
+    students = await _students_for_professor_course_notification(
+        db, professor_id=user.id, course_id=body.course_id
+    )
     cs = ConsultationSession(
         professor_id=user.id,
         course_id=body.course_id,
@@ -587,9 +797,6 @@ async def announce_preparation(
     )
     db.add(cs)
     await db.flush()
-    students = (
-        await db.scalars(select(User).join(CourseStudent, CourseStudent.student_id == User.id).where(CourseStudent.course_id == body.course_id))
-    ).all()
     for st in students:
         await notification_service.notify_user(
             db,
@@ -615,6 +822,9 @@ async def announce_graded_review(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
+    students = await _students_for_professor_course_notification(
+        db, professor_id=user.id, course_id=body.course_id
+    )
     cs = ConsultationSession(
         professor_id=user.id,
         course_id=body.course_id,
@@ -630,9 +840,6 @@ async def announce_graded_review(
     )
     db.add(cs)
     await db.flush()
-    students = (
-        await db.scalars(select(User).join(CourseStudent, CourseStudent.student_id == User.id).where(CourseStudent.course_id == body.course_id))
-    ).all()
     for st in students:
         await notification_service.notify_user(
             db,
@@ -658,14 +865,15 @@ async def prof_dashboard(
 
     days_ahead = await config_service.get_config_int(db, "days_before_exam_trigger", 7)
     from datetime import timedelta
-    cutoff = date.today() + timedelta(days=days_ahead)
+    today = utc_today()
+    cutoff = today + timedelta(days=days_ahead)
     upcoming_events = (
         await db.scalars(
             select(AcademicEvent)
             .join(CourseProfessor, CourseProfessor.course_id == AcademicEvent.course_id)
             .where(
                 CourseProfessor.professor_id == user.id,
-                AcademicEvent.event_date >= date.today(),
+                AcademicEvent.event_date >= today,
                 AcademicEvent.event_date <= cutoff,
             )
         )
@@ -680,7 +888,7 @@ async def prof_dashboard(
                 ConsultationSession.course_id == ev.course_id,
                 ConsultationSession.consultation_type == ConsultationType.preparation,
                 ConsultationSession.announced_by_professor == True,  # noqa: E712
-                ConsultationSession.session_date >= date.today(),
+                ConsultationSession.session_date >= today,
             )
         )
         reminders.append({
@@ -697,3 +905,82 @@ async def prof_dashboard(
         "total_bookings": int(total or 0),
         "upcoming_exam_reminders": reminders,
     }
+
+
+@router.get("/exams")
+async def professor_list_exams(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.professor)),
+):
+    return await exam_service.list_professor_exams(db, user.id)
+
+
+@router.get("/exams/{event_id}/suggest-slot")
+async def professor_exam_suggest_slot(
+    event_id: int,
+    purpose: str = Query(..., pattern=r"^(preparation|graded_review)$"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.professor)),
+):
+    if not await exam_service.professor_owns_event(db, user.id, event_id):
+        raise HTTPException(status_code=404)
+    ev = await db.get(AcademicEvent, event_id)
+    if not ev:
+        raise HTTPException(status_code=404)
+    return await exam_service.suggest_consultation_slot(
+        db, user.id, event_date=ev.event_date, purpose=purpose  # type: ignore[arg-type]
+    )
+
+
+class ExamNotifyBody(BaseModel):
+    purpose: str = Field(..., pattern=r"^(preparation|graded_review)$")
+    date: date
+    time_from: time
+    time_to: time
+    title: Optional[str] = Field(default=None, max_length=255)
+    message: Optional[str] = None
+
+
+@router.post("/exams/{event_id}/notify")
+async def professor_exam_notify(
+    event_id: int,
+    body: ExamNotifyBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(UserRole.professor)),
+):
+    try:
+        ann = await exam_service.notify_exam_session(
+            db,
+            user,
+            event_id,
+            purpose=body.purpose,  # type: ignore[arg-type]
+            slot_date=body.date,
+            time_from=body.time_from,
+            time_to=body.time_to,
+            title=body.title,
+            message=body.message,
+        )
+        await db.commit()
+    except ValueError as e:
+        await db.rollback()
+        msg = str(e)
+        if "already sent this notice" in msg.lower():
+            raise HTTPException(status_code=409, detail=msg) from e
+        raise HTTPException(status_code=400, detail=msg) from e
+    except (ProgrammingError, DBAPIError) as e:
+        await db.rollback()
+        logger.exception("professor_exam_notify DB error")
+        raw = str(getattr(e, "orig", e))
+        if "updated_at" in raw and "professor_announcements" in raw:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Database schema is missing professor_announcements.updated_at. "
+                    "From the backend folder run: alembic upgrade head"
+                ),
+            ) from e
+        raise HTTPException(
+            status_code=503,
+            detail="Database schema error while saving the announcement. Run alembic upgrade head and retry.",
+        ) from e
+    return {"announcement_id": ann.id}

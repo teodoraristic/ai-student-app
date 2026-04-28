@@ -1,0 +1,4 @@
+topic,keywords,tips
+baseline,"semantic,html",Landmarks; buttons for actions; anchors for navigation
+css,"grid,flex,clamp",Use clamp for fluid type; grid for dashboards
+a11y,"focus-visible,:focus-visible",Never remove focus ring without replacement

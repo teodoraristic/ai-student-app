@@ -1,0 +1,5 @@
+topic,keywords,tips
+rerender,"rerender,memo,usecallback",Stabilize props; split context; memo lists
+suspense,"suspense,lazy,code split",Route-level lazy; boundary error UI
+images,"next image,lcp,cls",Explicit sizes; priority for hero; modern formats
+server,"rsc,next,server component",Default server; client for interaction only

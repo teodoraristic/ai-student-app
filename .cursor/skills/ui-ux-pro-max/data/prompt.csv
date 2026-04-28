@@ -1,0 +1,4 @@
+style,css_keywords,ai_prompt_snippet
+minimalism,"whitespace,grid,1px hairline","Ultra-clean product UI, generous whitespace, subtle borders"
+glassmorphism,"backdrop-blur,border-white/20","Frosted panels, soft border, high text contrast scrim"
+brutalism,"mono,hard shadow,thick border","High contrast, monospace accents, raw geometry"

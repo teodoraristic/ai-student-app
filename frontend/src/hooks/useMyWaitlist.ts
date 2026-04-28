@@ -4,6 +4,8 @@ import { api } from '../api/client'
 export type MyWaitlistRow = {
   id: number
   session_id: number | null
+  kind?: 'session' | 'day'
+  any_slot_on_day?: boolean
   preferred_date: string
   consultation_type: string
   professor_name: string | null

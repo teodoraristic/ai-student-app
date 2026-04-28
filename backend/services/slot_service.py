@@ -1,4 +1,4 @@
-"""Consultation windows, exam periods, and available session slots."""
+"""Consultation windows and available session slots."""
 
 import logging
 import math
@@ -16,7 +16,6 @@ from backend.db.models import (
     ConsultationType,
     ConsultationWindow,
     CourseStudent,
-    ExamPeriod,
     ExtraSlot,
     SessionFormat,
     SessionStatus,
@@ -24,35 +23,31 @@ from backend.db.models import (
     ThesisApplicationStatus,
     WindowType,
 )
+from backend.dates import utc_today
 from backend.services import config_service
+from backend.services.thesis_service import first_shared_course_id
 
 logger = logging.getLogger(__name__)
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
-
-async def is_exam_period(session: AsyncSession, on: date) -> bool:
-    rows = (await session.scalars(select(ExamPeriod))).all()
-    for ep in rows:
-        if ep.date_from <= on <= ep.date_to:
-            return True
-    return False
+# Thesis consultations are always one-hour blocks (not window-configurable at 15 min).
+THESIS_SLOT_DURATION_MINUTES = 60
 
 
-def get_available_types(on: date, exam_period: bool) -> list[ConsultationType]:
+def get_available_types(on: date) -> list[ConsultationType]:
     """
-    Return active consultation types for the given date.
-    NOTE: preparation removed from Phase 1 (deferred to Phase 2).
+    Return consultation types offered in booking/chat flows for the given date.
+
+    General consultations are not suppressed during academic exam periods.
+    Preparation is deferred (Phase 2).
     """
     del on
-    types = [ConsultationType.graded_work_review, ConsultationType.thesis]
-    if exam_period:
-        # During exam period: only review and thesis (preparation disabled for Phase 1)
-        pass
-    else:
-        # Regular period: add general (preparation disabled for Phase 1)
-        types.append(ConsultationType.general)
-    return types
+    return [
+        ConsultationType.graded_work_review,
+        ConsultationType.thesis,
+        ConsultationType.general,
+    ]
 
 
 async def preparation_vote_threshold_needed(session: AsyncSession, course_id: int) -> int:
@@ -115,19 +110,31 @@ async def ensure_session_for_window_slot(
 ) -> ConsultationSession:
     """
     Ensure a ConsultationSession exists for the given slot.
-    Callers must pass the correct capacity (1 for all types in Phase 1).
+    For GENERAL, existing rows may be upgraded to ``general_consultation_slot_capacity`` when below that cap.
     """
-    existing = await session.scalar(
-        select(ConsultationSession).where(
-            ConsultationSession.professor_id == professor_id,
-            ConsultationSession.course_id == course_id,
-            ConsultationSession.consultation_type == ctype,
-            ConsultationSession.session_date == slot_date,
-            ConsultationSession.time_from == time_from,
-            ConsultationSession.time_to == time_to,
+    existing = (
+        await session.scalars(
+            select(ConsultationSession)
+            .where(
+                ConsultationSession.professor_id == professor_id,
+                ConsultationSession.course_id == course_id,
+                ConsultationSession.consultation_type == ctype,
+                ConsultationSession.session_date == slot_date,
+                ConsultationSession.time_from == time_from,
+                ConsultationSession.time_to == time_to,
+            )
+            .order_by(ConsultationSession.id.asc())
+            .limit(1)
         )
-    )
+    ).first()
     if existing:
+        if ctype == ConsultationType.general:
+            cap = await config_service.get_config_int(
+                session, "general_consultation_slot_capacity", 8
+            )
+            if existing.capacity < cap:
+                existing.capacity = cap
+                await session.flush()
         return existing
 
     used = 0
@@ -157,39 +164,62 @@ async def get_free_slots(
     group_size: int,
     student_id: int,
     next_weeks: int = 3,
+    academic_event_id: Optional[int] = None,
 ) -> list[ConsultationSession]:
     """
-    Phase 1: Returns 15-min sub-slots for GENERAL and GRADED_WORK_REVIEW,
-    60-min sub-slots for THESIS. All slots have capacity=1.
+    Returns 15-min sub-slots for GENERAL and GRADED_WORK_REVIEW, 60-min sub-slots for THESIS.
+    General slots use ``general_consultation_slot_capacity`` from system_config (default 8);
+    other types use per-call ``capacity`` (typically 1).
     """
     if ctype == ConsultationType.thesis:
-        active = await session.scalar(
-            select(ThesisApplication).where(
-                ThesisApplication.student_id == student_id,
-                ThesisApplication.professor_id == professor_id,
-                ThesisApplication.status == ThesisApplicationStatus.active,
+        active = (
+            await session.scalars(
+                select(ThesisApplication)
+                .where(
+                    ThesisApplication.student_id == student_id,
+                    ThesisApplication.professor_id == professor_id,
+                    ThesisApplication.status == ThesisApplicationStatus.active,
+                )
+                .order_by(ThesisApplication.id.desc())
+                .limit(1)
             )
-        )
+        ).first()
         if not active:
             raise ValueError("No active thesis supervision with this professor — book after your application is accepted")
 
-    today = date.today()
+    # Thesis chat often has no course in context; DB may require course_id NOT NULL (PostgreSQL).
+    # Use any course the student shares with this professor so session rows can be created.
+    session_course_id = course_id
+    if ctype == ConsultationType.thesis and session_course_id is None:
+        session_course_id = await first_shared_course_id(session, student_id, professor_id)
+        if session_course_id is None:
+            raise ValueError(
+                "Cannot list thesis slots: you have no enrolled course in common with this professor."
+            )
+
+    today = utc_today()
     now_time = datetime.now().time()
     end = today + timedelta(weeks=next_weeks)
 
     # PREPARATION: only show professor-announced sessions (kept for Phase 2, should not be called in Phase 1)
     if ctype == ConsultationType.preparation:
+        prep_conds = [
+            ConsultationSession.professor_id == professor_id,
+            ConsultationSession.course_id == course_id,
+            ConsultationSession.consultation_type == ConsultationType.preparation,
+            ConsultationSession.announced_by_professor == True,  # noqa: E712
+            ConsultationSession.session_date >= today,
+            ConsultationSession.session_date <= end,
+            ConsultationSession.status != SessionStatus.cancelled,
+        ]
+        if academic_event_id is not None:
+            if academic_event_id == 0:
+                prep_conds.append(ConsultationSession.event_id.is_(None))
+            else:
+                prep_conds.append(ConsultationSession.event_id == academic_event_id)
         announced = (
             await session.scalars(
-                select(ConsultationSession).where(
-                    ConsultationSession.professor_id == professor_id,
-                    ConsultationSession.course_id == course_id,
-                    ConsultationSession.consultation_type == ConsultationType.preparation,
-                    ConsultationSession.announced_by_professor == True,  # noqa: E712
-                    ConsultationSession.session_date >= today,
-                    ConsultationSession.session_date <= end,
-                    ConsultationSession.status != SessionStatus.cancelled,
-                )
+                select(ConsultationSession).where(*prep_conds)
             )
         ).all()
         results = []
@@ -243,19 +273,18 @@ async def get_free_slots(
         results.sort(key=lambda s: (s.session_date, s.time_from))
         return results
 
-    # GENERAL: blocked entirely during exam period
-    if ctype == ConsultationType.general:
-        if await is_exam_period(session, today):
-            return []
-
     # Enrollment check for non-thesis types
     if ctype != ConsultationType.thesis:
-        enrolled = await session.scalar(
-            select(CourseStudent).where(
-                CourseStudent.student_id == student_id,
-                CourseStudent.course_id == course_id,
+        enrolled = (
+            await session.scalars(
+                select(CourseStudent)
+                .where(
+                    CourseStudent.student_id == student_id,
+                    CourseStudent.course_id == course_id,
+                )
+                .limit(1)
             )
-        )
+        ).first()
         if not enrolled:
             raise ValueError("Not enrolled in this course")
 
@@ -273,6 +302,11 @@ async def get_free_slots(
 
     blocked = await _blocked_dates(session, professor_id)
     results: list[ConsultationSession] = []
+    general_capacity: Optional[int] = None
+    if ctype == ConsultationType.general:
+        general_capacity = await config_service.get_config_int(
+            session, "general_consultation_slot_capacity", 8
+        )
 
     for d in iter_days(today, end):
         if d in blocked:
@@ -281,8 +315,12 @@ async def get_free_slots(
         for w in windows:
             if w.day_of_week.lower() != wd:
                 continue
-            # Generate sub-slots based on window's slot_duration_minutes
-            sub_slots = generate_sub_slots(w.time_from, w.time_to, w.slot_duration_minutes)
+            slot_mins = (
+                THESIS_SLOT_DURATION_MINUTES
+                if ctype == ConsultationType.thesis
+                else w.slot_duration_minutes
+            )
+            sub_slots = generate_sub_slots(w.time_from, w.time_to, slot_mins)
             for sub_from, sub_to in sub_slots:
                 # Skip past sub-slots on today
                 if d == today and sub_to <= now_time:
@@ -290,12 +328,12 @@ async def get_free_slots(
                 cs = await ensure_session_for_window_slot(
                     session,
                     professor_id=professor_id,
-                    course_id=course_id,
+                    course_id=session_course_id,
                     ctype=ctype,
                     slot_date=d,
                     time_from=sub_from,
                     time_to=sub_to,
-                    capacity=1,  # Phase 1: all slots have capacity 1
+                    capacity=general_capacity if general_capacity is not None else 1,
                 )
                 used = await _used_capacity(session, cs.id)
                 if used + group_size <= cs.capacity:
@@ -316,20 +354,24 @@ async def get_free_slots(
     for ex in extras:
         if ex.slot_date in blocked:
             continue
-        # Generate sub-slots based on extra slot's slot_duration_minutes
-        sub_slots = generate_sub_slots(ex.time_from, ex.time_to, ex.slot_duration_minutes)
+        slot_mins = (
+            THESIS_SLOT_DURATION_MINUTES
+            if ctype == ConsultationType.thesis
+            else ex.slot_duration_minutes
+        )
+        sub_slots = generate_sub_slots(ex.time_from, ex.time_to, slot_mins)
         for sub_from, sub_to in sub_slots:
             if ex.slot_date == today and sub_to <= now_time:
                 continue
             cs = await ensure_session_for_window_slot(
                 session,
                 professor_id=professor_id,
-                course_id=course_id,
+                course_id=session_course_id,
                 ctype=ctype,
                 slot_date=ex.slot_date,
                 time_from=sub_from,
                 time_to=sub_to,
-                capacity=1,  # Phase 1: all slots have capacity 1
+                capacity=general_capacity if general_capacity is not None else 1,
             )
             used = await _used_capacity(session, cs.id)
             if used + group_size <= cs.capacity and cs not in results:
@@ -346,29 +388,94 @@ async def get_full_sessions(
     course_id: Optional[int],
     ctype: ConsultationType,
     next_weeks: int = 3,
+    on_date: Optional[date] = None,
+    student_id: Optional[int] = None,
 ) -> list[ConsultationSession]:
-    """Return announced sessions that are at full capacity (for waitlist offer)."""
-    today = date.today()
+    """
+    Return consultation sessions at full capacity (for waitlist offers).
+
+    GENERAL and THESIS include window-derived sessions (``announced_by_professor`` not required).
+    GRADED_WORK_REVIEW and PREPARATION only include professor-announced sessions.
+    When ``course_id`` is None and ``ctype`` is THESIS, ``student_id`` is used to resolve a shared course.
+    """
+    today = utc_today()
     end = today + timedelta(weeks=next_weeks)
-    announced = (
-        await session.scalars(
-            select(ConsultationSession).where(
-                ConsultationSession.professor_id == professor_id,
-                ConsultationSession.course_id == course_id,
-                ConsultationSession.consultation_type == ctype,
-                ConsultationSession.announced_by_professor == True,  # noqa: E712
-                ConsultationSession.session_date >= today,
-                ConsultationSession.session_date <= end,
-                ConsultationSession.status != SessionStatus.cancelled,
-            )
-        )
-    ).all()
-    full = []
-    for cs in announced:
+    session_course_id = course_id
+    if ctype == ConsultationType.thesis and session_course_id is None and student_id is not None:
+        session_course_id = await first_shared_course_id(session, student_id, professor_id)
+
+    stmt = select(ConsultationSession).where(
+        ConsultationSession.professor_id == professor_id,
+        ConsultationSession.consultation_type == ctype,
+        ConsultationSession.session_date >= today,
+        ConsultationSession.session_date <= end,
+        ConsultationSession.status != SessionStatus.cancelled,
+    )
+    if ctype in (ConsultationType.graded_work_review, ConsultationType.preparation):
+        stmt = stmt.where(ConsultationSession.announced_by_professor.is_(True))
+    if session_course_id is not None:
+        stmt = stmt.where(ConsultationSession.course_id == session_course_id)
+    else:
+        stmt = stmt.where(ConsultationSession.course_id.is_(None))
+    if on_date is not None:
+        stmt = stmt.where(ConsultationSession.session_date == on_date)
+
+    rows = list((await session.scalars(stmt)).all())
+    full: list[ConsultationSession] = []
+    for cs in rows:
         used = await _used_capacity(session, cs.id)
         if used >= cs.capacity:
             full.append(cs)
+    full.sort(key=lambda s: (s.session_date, s.time_from, s.time_to, s.id))
     return full
+
+
+async def iter_dates_for_professor_availability(
+    session: AsyncSession,
+    *,
+    professor_id: int,
+    course_id: Optional[int],
+    ctype: ConsultationType,
+    student_id: int,
+    next_weeks: int = 3,
+    max_dates: int = 12,
+) -> list[date]:
+    """
+    Upcoming calendar dates (within ``next_weeks``) where the professor has an active weekly window
+    and the day is not blocked. Used for day-level waitlist chips when no bookable slots exist.
+    """
+    _ = course_id  # reserved for future per-course window filtering
+    today = utc_today()
+    end = today + timedelta(weeks=next_weeks)
+    wtype = _window_type_for_consultation(ctype)
+    windows = list(
+        (
+            await session.scalars(
+                select(ConsultationWindow).where(
+                    ConsultationWindow.professor_id == professor_id,
+                    ConsultationWindow.window_type == wtype,
+                    ConsultationWindow.is_active.is_(True),
+                )
+            )
+        ).all()
+    )
+    if not windows:
+        return []
+    blocked = await _blocked_dates(session, professor_id)
+    out: list[date] = []
+    seen: set[date] = set()
+    for d in iter_days(today, end):
+        if d in blocked:
+            continue
+        wd = WEEKDAYS[d.weekday()]
+        if not any(w.day_of_week.lower() == wd for w in windows):
+            continue
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+        if len(out) >= max_dates:
+            break
+    return out
 
 
 def iter_days(start: date, end: date):
@@ -385,8 +492,9 @@ def generate_sub_slots(
     Generate sub-slots of given duration between time_from and time_to.
     Returns list of (start_time, end_time) tuples.
     """
-    start_dt = datetime.combine(date.today(), time_from)
-    end_dt = datetime.combine(date.today(), time_to)
+    anchor = date(2000, 1, 1)
+    start_dt = datetime.combine(anchor, time_from)
+    end_dt = datetime.combine(anchor, time_to)
     slots = []
     
     current = start_dt

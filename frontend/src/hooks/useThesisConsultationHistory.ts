@@ -15,7 +15,6 @@ export type ThesisConsultationHistoryRow = {
   course_name: string | null
   hall: string | null
   task: string | null
-  anonymous_question: string | null
   has_feedback: boolean
   booked_at: string
 }

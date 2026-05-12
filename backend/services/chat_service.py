@@ -117,7 +117,6 @@ class ParsedContext:
     course: Optional[str] = None
     course_id: Optional[int] = None
     task: Optional[str] = None
-    anonymous_question: Optional[str] = None
     failed_parse_count: int = 0
     raw_text: str = ""
     phase: str = "collect"
@@ -135,7 +134,6 @@ class ParsedContext:
             "course": self.course,
             "course_id": self.course_id,
             "task": self.task,
-            "anonymous_question": self.anonymous_question,
             "failed_parse_count": self.failed_parse_count,
             "raw_text": self.raw_text,
             "phase": self.phase,
@@ -156,7 +154,6 @@ class ParsedContext:
             course=d.get("course"),
             course_id=d.get("course_id"),
             task=d.get("task"),
-            anonymous_question=d.get("anonymous_question"),
             failed_parse_count=int(d.get("failed_parse_count") or 0),
             raw_text=d.get("raw_text") or "",
             phase=str(d.get("phase") or "collect"),
@@ -219,20 +216,13 @@ def _message_is_scheduling_transport(text: str) -> bool:
     )
 
 
-def _topic_signature_for_group_match(task: Optional[str], anonymous_question: Optional[str]) -> str:
-    """
-    Normalize topic for equality. Prefer explicit task (post task_collect); otherwise fall back
-    to anonymous_question so we do not miss a match when one student only has a long first message
-    and the other answered with the same topic in the task field.
-    """
+def _topic_signature_for_group_match(task: Optional[str]) -> str:
+    """Normalize topic for equality check."""
 
     def norm(s: Optional[str]) -> str:
         return " ".join((s or "").split()).strip().casefold()
 
-    t = norm(task)
-    if t:
-        return t
-    return norm(anonymous_question)
+    return norm(task)
 
 
 async def _find_peer_general_group_booking(
@@ -250,7 +240,7 @@ async def _find_peer_general_group_booking(
     pid, cid = ctx.professor_id, ctx.course_id
     if not pid or not cid:
         return None
-    sig = _topic_signature_for_group_match(ctx.task, ctx.anonymous_question)
+    sig = _topic_signature_for_group_match(ctx.task)
     if len(sig) < 2:
         return None
 
@@ -271,7 +261,7 @@ async def _find_peer_general_group_booking(
 
     matches: list[tuple[ConsultationSession, Booking]] = []
     for b, cs in rows:
-        if _topic_signature_for_group_match(b.task, b.anonymous_question) != sig:
+        if _topic_signature_for_group_match(b.task) != sig:
             continue
         used = await slot_service._used_capacity(session, cs.id)
         if used < cs.capacity:
@@ -290,7 +280,7 @@ async def _group_join_offer_message(session: AsyncSession, cs: ConsultationSessi
         c = await session.get(Course, ctx.course_id)
         if c:
             course_name = f" for {c.name}"
-    topic = (ctx.task or ctx.anonymous_question or "").strip() or "the same topic"
+    topic = (ctx.task or "").strip() or "the same topic"
     date_str = cs.session_date.strftime("%A %d %B")
     time_str = f"{cs.time_from.strftime('%H:%M')}–{cs.time_to.strftime('%H:%M')}"
     return (
@@ -344,19 +334,15 @@ async def _apply_topic_professor_cleanup(session: AsyncSession, ctx: ParsedConte
     if not u:
         return
     ctx.task = strip_professor_from_topic_text(ctx.task, u.first_name, u.last_name)
-    ctx.anonymous_question = strip_professor_from_topic_text(
-        ctx.anonymous_question, u.first_name, u.last_name
-    )
 
 
 async def _sanitize_state_dict(session: AsyncSession, state: dict[str, Any]) -> dict[str, Any]:
-    """Strip matched professor names from task / anonymous_question before persisting conversation state."""
+    """Strip matched professor names from task before persisting conversation state."""
     ctx = ParsedContext.from_state(state)
     await _apply_topic_professor_cleanup(session, ctx)
     return {
         **state,
         "task": ctx.task,
-        "anonymous_question": ctx.anonymous_question,
     }
 
 
@@ -496,7 +482,6 @@ async def parse_first_message(session: AsyncSession, text: str, student_id: int)
     if ctx.professor_id and mt != ConsultationType.thesis:
         ctx.course, ctx.course_id = await match_course(session, text, ctx.professor_id, student_id)
 
-    ctx.anonymous_question = extract_description(text)
     if mt == ConsultationType.general:
         ctx.task = extract_task(text)
     return ctx
@@ -532,8 +517,6 @@ async def process_reply(
         if t:
             ctx.task = t
 
-    if not _is_boilerplate_booking_message(new_text):
-        ctx.anonymous_question = merge_descriptions(ctx.anonymous_question, new_text)
     ctx.raw_text = f"{ctx.raw_text}\n{new_text}".strip()[:8000]
     return ctx
 
@@ -610,8 +593,6 @@ def _extracted_any(ctx: ParsedContext, new_message_parsed: ParsedContext) -> boo
     if new_message_parsed.course_id and not ctx.course_id:
         return True
     if new_message_parsed.task and not ctx.task:
-        return True
-    if new_message_parsed.anonymous_question and len(new_message_parsed.anonymous_question) > 10:
         return True
     return False
 
@@ -990,7 +971,7 @@ async def _booking_confirm_summary(
         c = await session.get(Course, ctx.course_id)
         if c:
             course_line = f"\n- Course: {c.name}"
-    topic = (ctx.task or ctx.anonymous_question or "").strip()
+    topic = (ctx.task or "").strip()
     topic_line = f"\n- Topic: {topic}" if topic else ""
     return (
         f"Please confirm your booking:\n"
@@ -1472,7 +1453,6 @@ async def _handle_scheduling_commands(
                 student=user,
                 session_id=ctx.pending_session_id,
                 task=ctx.task,
-                anonymous_question=ctx.anonymous_question,
                 group_size=1,
             )
         except ValueError as e:
@@ -1808,7 +1788,6 @@ async def process(
         }
         if structured.get("exam_session_booking"):
             merged.pop("task", None)
-            merged.pop("anonymous_question", None)
         state = await _sanitize_state_dict(session, merged)
         conv.state = state
         ctx = ParsedContext.from_state(state)
@@ -1820,7 +1799,6 @@ async def process(
             or ctx.consultation_type
             or ctx.course_id
             or ctx.task
-            or (ctx.anonymous_question and len(ctx.anonymous_question) > 10)
         )
         ctx.failed_parse_count = 0 if extracted else (1 if text.strip() else 0)
     else:
@@ -1870,7 +1848,6 @@ async def process(
                 or ctx.consultation_type
                 or ctx.course_id
                 or ctx.task
-                or (ctx.anonymous_question and len(ctx.anonymous_question) > 10)
             )
             ctx.failed_parse_count = 0 if extracted else (int(state.get("failed_parse_count") or 0) + 1)
         elif not structured and prev_phase == "collect" and _is_boilerplate_booking_message(text):
@@ -1880,7 +1857,6 @@ async def process(
                 or ctx.consultation_type
                 or ctx.course_id
                 or ctx.task
-                or (ctx.anonymous_question and len(ctx.anonymous_question) > 10)
             )
             ctx.failed_parse_count = 0 if extracted else (1 if text.strip() else 0)
         else:

@@ -12,7 +12,6 @@ export type EligibleExamRow = {
   time_from: string | null
   time_to: string | null
   hall: string | null
-  exam_period_name: string | null
   lecturer_name: string | null
   registration_count: number
   already_registered: boolean
@@ -48,7 +47,6 @@ export type RegistrationRow = {
   time_from: string | null
   time_to: string | null
   hall: string | null
-  exam_period_name: string | null
   lecturer_name: string | null
   can_cancel: boolean
 }

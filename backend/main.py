@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import get_settings
 from backend.middleware.audit_middleware import AuditMiddleware
+from backend.middleware.security_headers_middleware import SecurityHeadersMiddleware
 from backend.routers import admin as admin_router
 from backend.routers import auth as auth_router
 from backend.routers import chat as chat_router
@@ -54,13 +55,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Student Consultation API", version="0.1.0", lifespan=lifespan)
 
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(AuditMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(auth_router.router)

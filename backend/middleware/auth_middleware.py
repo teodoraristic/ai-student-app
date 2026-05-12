@@ -3,7 +3,7 @@
 import logging
 from typing import Annotated, Callable, TypeVar
 
-from jose import JWTError
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -28,7 +28,7 @@ async def get_current_user(
     try:
         payload = auth_service.decode_token(credentials.credentials)
         user_id = int(payload["sub"])
-    except (JWTError, KeyError, ValueError) as e:
+    except (jwt.PyJWTError, KeyError, ValueError) as e:
         logger.debug("JWT invalid: %s", e)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from e
 

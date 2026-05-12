@@ -28,7 +28,6 @@ from backend.db.models import (
     CourseProfessor,
     CourseStudent,
     CourseStudentStatus,
-    ExamPeriod,
     ProfessorProfile,
     Semester,
     SessionFormat,

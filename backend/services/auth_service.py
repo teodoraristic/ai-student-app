@@ -5,7 +5,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

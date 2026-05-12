@@ -13,7 +13,6 @@ from backend.db.models import (
     ConsultationSession,
     ConsultationType,
     ConsultationWindow,
-    ExamPeriod,
     SessionFormat,
     SessionStatus,
     SystemConfig,
@@ -49,26 +48,6 @@ class TestGeneralSlots:
 
         assert len(slots) > 0
         assert all(s.consultation_type == ConsultationType.general for s in slots)
-
-    async def test_general_slots_not_blocked_by_exam_period(self, db, student, professor, course, enrolled):
-        """GENERAL consultations are listed even when an academic exam period includes today."""
-        from backend.dates import utc_today
-
-        today = utc_today()
-        db.add(ExamPeriod(date_from=today - timedelta(days=1), date_to=today + timedelta(days=5), name="Exam"))
-        await db.flush()
-        await add_windows_all_days(db, professor.id)
-
-        slots = await slot_service.get_free_slots(
-            db,
-            professor_id=professor.id,
-            course_id=course.id,
-            ctype=ConsultationType.general,
-            group_size=1,
-            student_id=student.id,
-        )
-
-        assert len(slots) > 0
 
     async def test_not_enrolled_raises(self, db, student, professor, course):
         """No CourseStudent row → ValueError."""
@@ -625,43 +604,6 @@ class TestSubSlotSplitting:
         # Should have no slots for next Thursday
         thursday_slots = [s for s in slots if s.session_date == next_thursday]
         assert len(thursday_slots) == 0
-
-    async def test_general_slots_during_exam_period(self, db, student, professor, course, enrolled):
-        """GENERAL slots are returned even when the horizon overlaps an exam period."""
-        from datetime import time
-
-        from backend.dates import utc_today
-
-        window = ConsultationWindow(
-            professor_id=professor.id,
-            day_of_week="friday",
-            time_from=time(10, 0),
-            time_to=time(12, 0),
-            window_type=WindowType.regular,
-            slot_duration_minutes=15,
-        )
-        db.add(window)
-
-        today = utc_today()
-        exam = ExamPeriod(
-            date_from=today,
-            date_to=today + timedelta(weeks=2),
-            name="Winter exam period",
-        )
-        db.add(exam)
-        await db.flush()
-
-        slots = await slot_service.get_free_slots(
-            db,
-            professor_id=professor.id,
-            course_id=course.id,
-            ctype=ConsultationType.general,
-            group_size=1,
-            student_id=student.id,
-            next_weeks=2,
-        )
-
-        assert len(slots) > 0
 
     async def test_thesis_subslot_requires_active_application(self, db, student, professor, course, enrolled):
         """Test that thesis sub-slot generation requires active ThesisApplication."""

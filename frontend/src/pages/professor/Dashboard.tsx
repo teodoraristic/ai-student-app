@@ -1,269 +1,228 @@
-import type { CSSProperties } from 'react'
-import { useState } from 'react'
-import { api } from '../../api/client'
 import { useAuth } from '../../contexts/AuthContext'
-import { useProfessorDashboard, type ExamReminder } from '../../hooks/useProfessorDashboard'
+import { Link } from 'react-router-dom'
+import { useProfessorDashboard } from '../../hooks/useProfessorDashboard'
+import { useProfessorBookings, type ProfSessionCard } from '../../hooks/useProfessorBookings'
+import { TYPE_LABEL, TYPE_COLOR, formatBookingDate } from '../../components/BookingCard'
 import * as U from './uiTokens'
 
-const EMPTY_FORM = { date: '', time_from: '', time_to: '' }
+const DEFAULT_TYPE = { bg: '#f1f3f6', color: '#4d6080', border: '#d1d9e6' }
 
-function detailMessage(e: unknown, fallback: string): string {
-  const ax = e as { response?: { data?: { detail?: string } } }
-  const d = ax.response?.data?.detail
-  return typeof d === 'string' ? d : fallback
+const STAT_CARDS = [
+  {
+    key: 'upcoming_bookings' as const,
+    label: 'Upcoming bookings',
+    color: '#3b5bdb',
+    bg: '#e8f0fe',
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+        <path d="M19 3h-1V1h-2v2H8V1H6v2H5C3.89 3 3 3.9 3 5v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'total_bookings' as const,
+    label: 'Total bookings',
+    color: '#1a7a4a',
+    bg: '#e6f7ee',
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+        <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'thesis_students' as const,
+    label: 'Thesis students',
+    color: '#c2500f',
+    bg: '#fff0e6',
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+        <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zM5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" />
+      </svg>
+    ),
+  },
+  {
+    key: 'pending_applications' as const,
+    label: 'Pending applications',
+    color: '#92570a',
+    bg: '#fffbf0',
+    icon: (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+      </svg>
+    ),
+  },
+]
+
+function sessionStudentLine(s: ProfSessionCard): string {
+  const active = s.bookings.filter((b) => b.status !== 'CANCELLED')
+  if (active.length === 0) return 'No students'
+  if (active.length === 1) return active[0].student_name?.trim() || `Student #${active[0].id}`
+  return `${active.length} students`
 }
-
-const labelBlock: CSSProperties = { display: 'block', fontSize: '0.78rem', fontWeight: 500, color: '#4d6080', marginBottom: '0.35rem' }
 
 export default function ProfessorDashboard() {
   const { user } = useAuth()
-  const { data, loading, error, reload } = useProfessorDashboard()
-  const [announcingPrep, setAnnouncingPrep] = useState<number | null>(null)
-  const [announcingReview, setAnnouncingReview] = useState<number | null>(null)
-  const [form, setForm] = useState(EMPTY_FORM)
-  const [submitting, setSubmitting] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [ok, setOk] = useState<string | null>(null)
+  const { data, loading: dashLoading, error: dashError } = useProfessorDashboard()
+  const { sessions, loading: sessLoading } = useProfessorBookings(true)
 
-  const reminders = data?.upcoming_exam_reminders ?? []
-
-  async function announcePrep(reminder: ExamReminder) {
-    setErr(null)
-    setOk(null)
-    setSubmitting(true)
-    try {
-      await api.post('/professor/announce-preparation', {
-        course_id: reminder.course_id,
-        date: form.date,
-        time_from: form.time_from,
-        time_to: form.time_to,
-      })
-      setOk(`Preparation session scheduled for ${form.date}`)
-      setAnnouncingPrep(null)
-      setForm(EMPTY_FORM)
-      await reload()
-    } catch (e: unknown) {
-      setErr(detailMessage(e, 'Failed to schedule'))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  async function announceReview(reminder: ExamReminder) {
-    setErr(null)
-    setOk(null)
-    setSubmitting(true)
-    try {
-      await api.post('/professor/announce-graded-review', {
-        course_id: reminder.course_id,
-        date: form.date,
-        time_from: form.time_from,
-        time_to: form.time_to,
-      })
-      setOk(`Graded review session scheduled for ${form.date}`)
-      setAnnouncingReview(null)
-      setForm(EMPTY_FORM)
-      await reload()
-    } catch (e: unknown) {
-      setErr(detailMessage(e, 'Failed to schedule'))
-    } finally {
-      setSubmitting(false)
-    }
-  }
+  const preview = sessions.slice(0, 3)
 
   return (
     <div style={U.shell}>
-      <div style={{ ...U.pageHeader, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={U.titleHome}>Hello, {user?.first_name}</h1>
-          <p style={U.subtitle}>Exam reminders, preparation sessions, and a snapshot of your workload.</p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexShrink: 0 }}>
-          {data != null && (
-            <span style={{
-              fontSize: '0.78rem',
-              fontWeight: 600,
-              color: '#4d6080',
-              background: '#fff',
-              border: '1px solid #e8ecf0',
-              borderRadius: 20,
-              padding: '0.35rem 0.75rem',
-            }}
-            >
-              Total bookings: {data.total_bookings}
-            </span>
-          )}
-          <button type="button" onClick={() => void reload()} disabled={loading} style={{ ...U.btnSecondary, opacity: loading ? 0.7 : 1, cursor: loading ? 'wait' : 'pointer' }}>
-            Refresh
-          </button>
-        </div>
+      {/* Header */}
+      <div style={{ ...U.pageHeader, marginBottom: '1.5rem' }}>
+        <h1 style={U.titleHome}>Hello, {user?.first_name}</h1>
+        <p style={U.subtitle}>Your workload at a glance.</p>
       </div>
 
-      {loading && <p style={{ fontSize: '0.87rem', color: '#aab8cc', marginBottom: '1rem' }}>Loading dashboard…</p>}
-      {error && (
+      {dashError && (
         <div style={{ ...U.cardMuted, marginBottom: '1rem', borderColor: '#ffc9c9', background: '#fff5f5', color: '#c0392b', fontSize: '0.85rem' }}>
-          {error}
+          {dashError}
         </div>
       )}
 
-      {ok ? (
-        <div style={{ ...U.cardMuted, marginBottom: '1rem', borderColor: '#b8e8cc', background: '#f0faf4', color: '#1a7a4a', fontSize: '0.85rem' }}>
-          {ok}
-        </div>
-      ) : null}
-      {err ? (
-        <div style={{ ...U.cardMuted, marginBottom: '1rem', borderColor: '#ffc9c9', background: '#fff5f5', color: '#c0392b', fontSize: '0.85rem' }}>
-          {err}
-        </div>
-      ) : null}
-
-      <section style={U.sectionBlock}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <h2 style={{ ...U.sectionTitle, margin: 0 }}>Upcoming exam reminders</h2>
-          <span style={{ fontSize: '0.75rem', color: '#8fa3c4' }}>Schedule preparation or announce a graded review session</span>
-        </div>
-        {reminders.length === 0 && !loading ? (
-          <div style={U.emptyState}>
-            <p style={{ margin: 0 }}>No upcoming exams in the configured trigger window.</p>
+      {/* Stats grid */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+        gap: '0.85rem',
+        marginBottom: '1.75rem',
+      }}>
+        {STAT_CARDS.map((card) => (
+          <div key={card.key} style={{
+            background: '#fff',
+            border: '1px solid #e8ecf0',
+            borderRadius: 12,
+            padding: '1rem 1.1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            minWidth: 0,
+          }}>
+            <div style={{
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: card.bg,
+              color: card.color,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              {card.icon}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <p style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f1f3d', margin: 0, lineHeight: 1.1 }}>
+                {dashLoading ? '—' : (data?.[card.key] ?? 0)}
+              </p>
+              <p style={{ fontSize: '0.72rem', color: '#8fa3c4', margin: '0.2rem 0 0 0', fontWeight: 500, lineHeight: 1.3 }}>
+                {card.label}
+              </p>
+            </div>
           </div>
-        ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {reminders.map((r) => (
-              <li key={r.event_id} style={U.card}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', alignItems: 'stretch' }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
-                    <div style={{ minWidth: 0 }}>
-                      <p style={{ fontWeight: 600, fontSize: '0.95rem', color: '#0f1f3d', margin: 0 }}>{r.event_name}</p>
-                      <p style={{ fontSize: '0.82rem', color: '#6b7ea8', margin: '0.25rem 0 0 0' }}>
-                        {r.course_name}
-                        {' · '}
-                        {r.event_date}
-                        {r.event_type ? ` · ${r.event_type}` : ''}
+        ))}
+      </div>
+
+      {/* Upcoming sessions preview */}
+      <section style={U.sectionBlock}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <h2 style={{ ...U.sectionTitle, margin: 0 }}>Upcoming sessions</h2>
+          <Link
+            to="/professor/bookings"
+            style={{ fontSize: '0.8rem', color: '#3b5bdb', fontWeight: 500, textDecoration: 'none' }}
+          >
+            See all →
+          </Link>
+        </div>
+
+        {sessLoading && <p style={{ fontSize: '0.85rem', color: '#aab8cc' }}>Loading…</p>}
+
+        {!sessLoading && sessions.length === 0 && (
+          <div style={U.emptyState}>
+            <p style={{ margin: 0 }}>No upcoming sessions booked.</p>
+          </div>
+        )}
+
+        {!sessLoading && preview.length > 0 && (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+            {preview.map((s) => {
+              const ts = TYPE_COLOR[s.consultation_type] ?? DEFAULT_TYPE
+              const subject = s.course_code && s.course_name
+                ? `${s.course_code} · ${s.course_name}`
+                : s.course_name ?? s.course_code ?? null
+
+              return (
+                <li key={s.session_id} style={{
+                  background: '#fff',
+                  border: '1px solid #e8ecf0',
+                  borderLeft: `4px solid ${ts.border}`,
+                  borderRadius: 10,
+                  padding: '0.75rem 1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '1rem',
+                  flexWrap: 'wrap',
+                  minWidth: 0,
+                }}>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f1f3d', margin: 0, lineHeight: 1.3 }}>
+                      {sessionStudentLine(s)}
+                    </p>
+                    {subject && (
+                      <p style={{ fontSize: '0.78rem', color: '#6b7ea8', margin: '0.2rem 0 0 0' }}>
+                        {subject}
                       </p>
-                      {r.has_preparation_scheduled ? (
-                        <span style={{
-                          marginTop: '0.45rem',
-                          display: 'inline-block',
-                          fontSize: '0.72rem',
-                          fontWeight: 500,
-                          padding: '0.2rem 0.55rem',
-                          borderRadius: 20,
-                          background: '#f0faf4',
-                          color: '#1a7a4a',
-                          border: '1px solid #b8e8cc',
-                        }}
-                        >
-                          Preparation scheduled
-                        </span>
-                      ) : (
-                        <span style={{
-                          marginTop: '0.45rem',
-                          display: 'inline-block',
-                          fontSize: '0.72rem',
-                          fontWeight: 500,
-                          padding: '0.2rem 0.55rem',
-                          borderRadius: 20,
-                          background: '#fffbf0',
-                          color: '#92570a',
-                          border: '1px solid #f5e6c0',
-                        }}
-                        >
-                          No preparation yet
-                        </span>
-                      )}
-                    </div>
-                    {!r.has_preparation_scheduled && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', flexShrink: 0 }}>
-                        <button
-                          type="button"
-                          style={U.btnPrimary}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = '#243660' }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = '#1a2744' }}
-                          onClick={() => {
-                            setAnnouncingPrep(r.event_id)
-                            setAnnouncingReview(null)
-                            setForm(EMPTY_FORM)
-                            setErr(null)
-                          }}
-                        >
-                          Schedule preparation
-                        </button>
-                        <button
-                          type="button"
-                          style={U.btnSecondary}
-                          onClick={() => {
-                            setAnnouncingReview(r.event_id)
-                            setAnnouncingPrep(null)
-                            setForm(EMPTY_FORM)
-                            setErr(null)
-                          }}
-                        >
-                          Announce graded review
-                        </button>
-                      </div>
                     )}
                   </div>
-
-                  {(announcingPrep === r.event_id || announcingReview === r.event_id) && (
-                    <div style={{ ...U.cardMuted, marginTop: '0.25rem' }}>
-                      <p style={{ ...U.meta, marginBottom: '0.65rem' }}>
-                        {announcingPrep === r.event_id ? 'Schedule preparation session' : 'Announce graded review session'}
-                      </p>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem' }}>
-                        <label style={{ flex: '1 1 140px', minWidth: 0 }}>
-                          <span style={labelBlock}>Date</span>
-                          <input
-                            type="date"
-                            style={U.inputBase}
-                            value={form.date}
-                            onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                          />
-                        </label>
-                        <label style={{ flex: '1 1 120px', minWidth: 0 }}>
-                          <span style={labelBlock}>From</span>
-                          <input
-                            type="time"
-                            style={U.inputBase}
-                            value={form.time_from}
-                            onChange={(e) => setForm((f) => ({ ...f, time_from: e.target.value }))}
-                          />
-                        </label>
-                        <label style={{ flex: '1 1 120px', minWidth: 0 }}>
-                          <span style={labelBlock}>To</span>
-                          <input
-                            type="time"
-                            style={U.inputBase}
-                            value={form.time_to}
-                            onChange={(e) => setForm((f) => ({ ...f, time_to: e.target.value }))}
-                          />
-                        </label>
-                      </div>
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          disabled={submitting}
-                          style={{ ...U.btnAccent, opacity: submitting ? 0.65 : 1, cursor: submitting ? 'wait' : 'pointer' }}
-                          onClick={() => void (announcingPrep === r.event_id ? announcePrep(r) : announceReview(r))}
-                        >
-                          {submitting ? 'Saving…' : 'Confirm'}
-                        </button>
-                        <button
-                          type="button"
-                          style={{ ...U.btnSecondary, border: 'none', color: '#8fa3c4', background: 'transparent' }}
-                          onClick={() => {
-                            setAnnouncingPrep(null)
-                            setAnnouncingReview(null)
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <span style={{
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      padding: '0.18rem 0.5rem',
+                      borderRadius: 20,
+                      background: ts.bg,
+                      color: ts.color,
+                    }}>
+                      {TYPE_LABEL[s.consultation_type] ?? s.consultation_type}
+                    </span>
+                    {s.session_date && (
+                      <span style={{
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        color: '#0f1f3d',
+                        background: '#f5f7fa',
+                        border: '1px solid #e8ecf0',
+                        borderRadius: 20,
+                        padding: '0.22rem 0.65rem',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {formatBookingDate(s.session_date, s.time_from, s.time_to)}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
+        )}
+
+        {!sessLoading && sessions.length > 3 && (
+          <Link
+            to="/professor/bookings"
+            style={{
+              display: 'inline-block',
+              marginTop: '0.75rem',
+              fontSize: '0.8rem',
+              color: '#3b5bdb',
+              fontWeight: 500,
+              textDecoration: 'none',
+            }}
+          >
+            +{sessions.length - 3} more upcoming sessions →
+          </Link>
         )}
       </section>
     </div>

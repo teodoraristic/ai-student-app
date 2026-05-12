@@ -1,37 +1,9 @@
-import type { CSSProperties } from 'react'
 import { useMemo, useState } from 'react'
 import { useProfessorBookings, type ProfSessionBooking, type ProfSessionCard } from '../../hooks/useProfessorBookings'
+import { BookingCard } from '../../components/BookingCard'
 import * as U from './uiTokens'
 
 type Tab = 'upcoming' | 'past'
-
-const TYPE_LABEL: Record<string, string> = {
-  GENERAL: 'General',
-  PREPARATION: 'Preparation',
-  GRADED_WORK_REVIEW: 'Review',
-  THESIS: 'Thesis',
-}
-
-const TYPE_COLOR: Record<string, { bg: string; color: string }> = {
-  GENERAL: { bg: '#e8f0fe', color: '#3b5bdb' },
-  PREPARATION: { bg: '#fff0e6', color: '#c2500f' },
-  GRADED_WORK_REVIEW: { bg: '#fff3cd', color: '#92570a' },
-  THESIS: { bg: '#e6f7ee', color: '#1a7a4a' },
-}
-
-const metaLabel: CSSProperties = {
-  fontSize: '0.68rem',
-  fontWeight: 600,
-  color: '#8fa3c4',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  margin: '0 0 0.2rem 0',
-}
-
-function formatSessionDate(iso: string) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
-}
 
 function formatTimeShort(iso: string) {
   if (!iso) return ''
@@ -197,164 +169,89 @@ export default function Bookings() {
         }}
       >
         {sessions.map((s) => {
-          const ctype = s.consultation_type
-          const typeStyle = TYPE_COLOR[ctype] ?? { bg: '#f1f3f6', color: '#4d6080' }
-          const subj = subjectLine(s)
-          const topic = topicBlock(s)
           const tf = formatTimeShort(s.time_from)
           const tt = formatTimeShort(s.time_to)
+          const timeFrom = tf || null
+          const timeTo = tt || null
 
-          return (
-            <div
-              key={s.session_id}
-              style={{
-                background: '#fff',
-                border: '1px solid #e8ecf0',
-                borderRadius: 12,
-                padding: '0.85rem 1rem',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem',
-                minWidth: 0,
-              }}
-            >
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.35rem' }}>
-                <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.15rem 0.45rem', borderRadius: 20, background: typeStyle.bg, color: typeStyle.color }}>
-                  {TYPE_LABEL[ctype] ?? ctype}
-                </span>
-                {[...new Set(s.bookings.map((b) => b.status))].map((status) => {
-                  const oc = bookingStatusChip(status)
-                  return oc ? (
-                    <span key={status} style={{ fontSize: '0.65rem', fontWeight: 600, padding: '0.15rem 0.45rem', borderRadius: 20, background: oc.bg, color: oc.color }}>
-                      {oc.label}
-                    </span>
-                  ) : null
-                })}
-              </div>
+          const statusBadges = [...new Set(s.bookings.map((b) => b.status))]
+            .map(bookingStatusChip)
+            .filter((x): x is NonNullable<typeof x> => x !== null)
 
-              <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f1f3d', lineHeight: 1.35 }}>
-                {s.bookings.length === 1 ? (
-                  <p style={{ margin: 0 }}>
-                    <BookingNameLine b={s.bookings[0]} />
-                  </p>
-                ) : (
-                  <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
-                    {s.bookings.map((b) => (
-                      <li key={b.id} style={{ marginBottom: '0.15rem' }}>
-                        <BookingNameLine b={b} />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+          const attendanceInfo = (showGeneralAttendance(s) || showPrepOrReviewAttendance(s))
+            ? {
+                label: 'Expected attendance',
+                text: `Expected ${s.session_party_total} ${s.session_party_total === 1 ? 'person' : 'people'}.`,
+              }
+            : null
 
-              {subj ? (
-                <div>
-                  <p style={metaLabel}>Subject</p>
-                  <p style={{ fontSize: '0.78rem', color: '#3d4f66', margin: 0, fontWeight: 500, lineHeight: 1.35 }}>{subj}</p>
-                </div>
-              ) : null}
+          const primaryName = s.bookings.length === 1
+            ? <BookingNameLine b={s.bookings[0]} />
+            : (
+              <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
+                {s.bookings.map((b) => (
+                  <li key={b.id} style={{ marginBottom: '0.15rem' }}>
+                    <BookingNameLine b={b} />
+                  </li>
+                ))}
+              </ul>
+            )
 
-              {s.hall ? (
-                <div>
-                  <p style={metaLabel}>Hall</p>
-                  <p style={{ fontSize: '0.76rem', color: '#4d6080', margin: 0 }}>{s.hall}</p>
-                </div>
-              ) : null}
-
-              {topic ? (
-                <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.45rem 0.55rem' }}>
-                  <p style={metaLabel}>Topic</p>
-                  <p
+          const footer = tab === 'past' && s.bookings.some((b) => b.status === 'ACTIVE') ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {s.bookings
+                .filter((b) => b.status === 'ACTIVE')
+                .map((b) => (
+                  <div
+                    key={b.id}
                     style={{
-                      fontSize: '0.74rem',
-                      color: '#4d6080',
-                      margin: 0,
-                      lineHeight: 1.45,
-                      whiteSpace: 'pre-wrap',
+                      display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+                      justifyContent: 'space-between', gap: '0.45rem',
+                      paddingTop: '0.35rem', borderTop: '1px solid #f0f2f5',
                     }}
                   >
-                    {topic}
-                  </p>
-                </div>
-              ) : null}
-
-              {showGeneralAttendance(s) || showPrepOrReviewAttendance(s) ? (
-                <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.45rem 0.55rem' }}>
-                  <p style={metaLabel}>Expected attendance</p>
-                  <p style={{ fontSize: '0.74rem', color: '#4d6080', margin: 0, lineHeight: 1.45 }}>
-                    Expected <strong>{s.session_party_total}</strong> {s.session_party_total === 1 ? 'person' : 'people'}.
-                  </p>
-                </div>
-              ) : null}
-
-              <div style={{ marginTop: 'auto', paddingTop: '0.35rem', borderTop: '1px solid #f0f2f5', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem 0.75rem', fontSize: '0.76rem', color: '#4d6080' }}>
-                  {s.session_date ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
-                        <path d="M19 3h-1V1h-2v2H8V1H6v2H5C3.89 3 3 3.9 3 5v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z" />
-                      </svg>
-                      {formatSessionDate(s.session_date)}
+                    <span style={{ fontSize: '0.74rem', color: '#6b7ea8' }}>
+                      {studentLabel(b)} · #{b.id}
                     </span>
-                  ) : null}
-                  {tf ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
-                        <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z" />
-                      </svg>
-                      {tf}
-                      {tt ? `–${tt}` : ''}
-                    </span>
-                  ) : null}
-                </div>
-
-                {tab === 'past' && s.bookings.some((b) => b.status === 'ACTIVE') ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {s.bookings
-                      .filter((b) => b.status === 'ACTIVE')
-                      .map((b) => (
-                        <div
-                          key={b.id}
-                          style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '0.45rem',
-                            paddingTop: '0.35rem',
-                            borderTop: '1px solid #f0f2f5',
-                          }}
-                        >
-                          <span style={{ fontSize: '0.74rem', color: '#6b7ea8' }}>
-                            {studentLabel(b)}
-                            {' · '}
-                            #{b.id}
-                          </span>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-                            <button
-                              type="button"
-                              disabled={patchingId === b.id}
-                              style={{ ...U.btnSuccess, padding: '0.32rem 0.6rem', fontSize: '0.74rem', opacity: patchingId === b.id ? 0.6 : 1, cursor: patchingId === b.id ? 'wait' : 'pointer' }}
-                              onClick={() => void markStatus(b.id, 'ATTENDED')}
-                            >
-                              Mark attended
-                            </button>
-                            <button
-                              type="button"
-                              disabled={patchingId === b.id}
-                              style={{ ...U.btnDangerOutline, padding: '0.32rem 0.6rem', fontSize: '0.74rem', opacity: patchingId === b.id ? 0.6 : 1, cursor: patchingId === b.id ? 'wait' : 'pointer' }}
-                              onClick={() => void markStatus(b.id, 'NO_SHOW')}
-                            >
-                              Mark no-show
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                      <button
+                        type="button"
+                        disabled={patchingId === b.id}
+                        style={{ ...U.btnSuccess, padding: '0.32rem 0.6rem', fontSize: '0.74rem', opacity: patchingId === b.id ? 0.6 : 1, cursor: patchingId === b.id ? 'wait' : 'pointer' }}
+                        onClick={() => void markStatus(b.id, 'ATTENDED')}
+                      >
+                        Mark attended
+                      </button>
+                      <button
+                        type="button"
+                        disabled={patchingId === b.id}
+                        style={{ ...U.btnDangerOutline, padding: '0.32rem 0.6rem', fontSize: '0.74rem', opacity: patchingId === b.id ? 0.6 : 1, cursor: patchingId === b.id ? 'wait' : 'pointer' }}
+                        onClick={() => void markStatus(b.id, 'NO_SHOW')}
+                      >
+                        Mark no-show
+                      </button>
+                    </div>
                   </div>
-                ) : null}
-              </div>
+                ))}
             </div>
+          ) : null
+
+          return (
+            <BookingCard
+              key={s.session_id}
+              consultationType={s.consultation_type}
+              primaryLabel={s.bookings.length === 1 ? 'Student' : 'Students'}
+              primaryName={primaryName}
+              statusBadges={statusBadges}
+              subject={subjectLine(s)}
+              hall={s.hall}
+              topic={topicBlock(s)}
+              infoBox={attendanceInfo}
+              sessionDate={s.session_date}
+              timeFrom={timeFrom}
+              timeTo={timeTo}
+              footer={footer}
+            />
           )
         })}
       </div>

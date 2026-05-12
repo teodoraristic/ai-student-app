@@ -1,9 +1,9 @@
-import type { CSSProperties } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { useStudentChat } from '../../contexts/StudentChatContext'
 import { useNotifications } from '../../hooks/useNotifications'
 import { useStudentDashboardData } from '../../hooks/useStudentDashboard'
+import { BookingCard } from '../../components/BookingCard'
 
 type Booking = {
   id: number
@@ -17,38 +17,6 @@ type Booking = {
   course_name: string | null
   hall: string | null
   task: string | null
-  anonymous_question: string | null
-}
-
-const TYPE_LABEL: Record<string, string> = {
-  GENERAL: 'General',
-  PREPARATION: 'Preparation',
-  GRADED_WORK_REVIEW: 'Review',
-  THESIS: 'Thesis',
-}
-
-const TYPE_COLOR: Record<string, { bg: string; color: string }> = {
-  GENERAL: { bg: '#e8f0fe', color: '#3b5bdb' },
-  PREPARATION: { bg: '#fff0e6', color: '#c2500f' },
-  GRADED_WORK_REVIEW: { bg: '#fff3cd', color: '#92570a' },
-  THESIS: { bg: '#e6f7ee', color: '#1a7a4a' },
-}
-
-const dashMeta: CSSProperties = {
-  fontSize: '0.68rem',
-  fontWeight: 600,
-  color: '#8fa3c4',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  margin: '0 0 0.15rem 0',
-}
-
-function formatDate(date: string, timeFrom: string | null, timeTo: string | null) {
-  const d = new Date(date)
-  const formatted = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
-  if (timeFrom && timeTo) return `${formatted} · ${timeFrom.slice(0, 5)}–${timeTo.slice(0, 5)}`
-  if (timeFrom) return `${formatted} · ${timeFrom.slice(0, 5)}`
-  return formatted
 }
 
 function dashSubject(b: Booking): string | null {
@@ -60,13 +28,7 @@ function dashSubject(b: Booking): string | null {
 
 function dashTopic(b: Booking): string | null {
   const t = (b.task ?? '').trim()
-  const q = (b.anonymous_question ?? '').trim()
-  if (t && q) {
-    const qq = q.length > 80 ? `${q.slice(0, 80)}…` : q
-    return `${t} — ${qq}`
-  }
   if (t) return t.length > 100 ? `${t.slice(0, 100)}…` : t
-  if (q) return q.length > 100 ? `${q.slice(0, 100)}…` : q
   return null
 }
 
@@ -96,39 +58,108 @@ export default function Dashboard() {
       if (d !== 0) return d
       return (a.time_from ?? '').localeCompare(b.time_from ?? '')
     })
-    .slice(0, 2)
+
+  const upcomingCount = upcoming.length
+  const upcomingPreview = upcoming.slice(0, 2)
 
   const previewNotifs = [...notifItems].sort((a, b) => {
     if (a.is_read !== b.is_read) return a.is_read ? 1 : -1
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   }).slice(0, 4)
 
+  const unreadCount = notifItems.filter((n) => !n.is_read).length
+
   const prepBookNotif = notifItems.find((n) => !n.is_read && n.link?.includes('prepFlow=1'))
   const gradedBookNotif = notifItems.find((n) => !n.is_read && n.link?.includes('gradedReviewFlow=1'))
 
   return (
-    <div>
+    <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+
+      {/* Header */}
       <div style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f1f3d', margin: 0 }}>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f1f3d', margin: '0 0 0.25rem 0' }}>
           Hello, {user?.first_name}
         </h1>
-        <p style={{ color: '#8fa3c4', fontSize: '0.9rem', margin: '0.25rem 0 0 0' }}>
+        <p style={{ color: '#8fa3c4', fontSize: '0.9rem', margin: 0 }}>
           Overview of your consultations and upcoming obligations.
         </p>
       </div>
 
+      {/* Quick stats row */}
+      {!loading && (
+        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.6rem',
+            background: '#fff', border: '1px solid #e8ecf0', borderRadius: 10,
+            padding: '0.65rem 1rem', flex: '1 1 140px', minWidth: 0,
+          }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 8,
+              background: '#eef1fd', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="#3b5bdb" aria-hidden>
+                <path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5C3.89 3 3 3.9 3 5v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z" />
+              </svg>
+            </div>
+            <div>
+              <p style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f1f3d', margin: 0, lineHeight: 1 }}>{upcomingCount}</p>
+              <p style={{ fontSize: '0.72rem', color: '#8fa3c4', margin: '0.15rem 0 0 0', fontWeight: 500 }}>Upcoming</p>
+            </div>
+          </div>
+
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.6rem',
+            background: '#fff', border: '1px solid #e8ecf0', borderRadius: 10,
+            padding: '0.65rem 1rem', flex: '1 1 140px', minWidth: 0,
+          }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 8,
+              background: unreadCount > 0 ? '#fff7e6' : '#f5f7fa',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill={unreadCount > 0 ? '#f5a623' : '#8fa3c4'} aria-hidden>
+                <path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" />
+              </svg>
+            </div>
+            <div>
+              <p style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f1f3d', margin: 0, lineHeight: 1 }}>{unreadCount}</p>
+              <p style={{ fontSize: '0.72rem', color: '#8fa3c4', margin: '0.15rem 0 0 0', fontWeight: 500 }}>Unread</p>
+            </div>
+          </div>
+
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.6rem',
+            background: '#fff', border: '1px solid #e8ecf0', borderRadius: 10,
+            padding: '0.65rem 1rem', flex: '1 1 140px', minWidth: 0,
+          }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 8,
+              background: announcements.length > 0 ? '#fffbf0' : '#f5f7fa',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill={announcements.length > 0 ? '#f5a623' : '#8fa3c4'} aria-hidden>
+                <path d="M18 11v2H6v-2h12m-1-4l-7 4 7 4V7M4 11v2H2v-2h2z" />
+              </svg>
+            </div>
+            <div>
+              <p style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f1f3d', margin: 0, lineHeight: 1 }}>{announcements.length}</p>
+              <p style={{ fontSize: '0.72rem', color: '#8fa3c4', margin: '0.15rem 0 0 0', fontWeight: 500 }}>Notices</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Action card — exam prep / graded review */}
       {(prepBookNotif || gradedBookNotif) && (
-        <section
-          style={{
-            marginBottom: '1.35rem',
-            padding: '1rem 1.15rem',
-            borderRadius: 14,
-            background: 'linear-gradient(135deg, #1a2744 0%, #24365a 55%, #1f3050 100%)',
-            color: '#f8fafc',
-            boxShadow: '0 10px 28px rgba(26, 39, 68, 0.22)',
-            border: '1px solid rgba(255,255,255,0.08)',
-          }}
-        >
+        <section style={{
+          marginBottom: '1.5rem',
+          padding: '1rem 1.15rem',
+          borderRadius: 14,
+          background: 'linear-gradient(135deg, #1a2744 0%, #24365a 55%, #1f3050 100%)',
+          color: '#f8fafc',
+          boxShadow: '0 10px 28px rgba(26, 39, 68, 0.22)',
+          border: '1px solid rgba(255,255,255,0.08)',
+        }}>
           <p style={{ margin: '0 0 0.35rem 0', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(248,250,252,0.72)' }}>
             Action needed
           </p>
@@ -151,11 +182,7 @@ export default function Dashboard() {
               const sessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined
               if (Number.isFinite(courseId) && courseId > 0 && Number.isFinite(professorId) && professorId > 0) {
                 void (async () => {
-                  try {
-                    await markRead(n.id)
-                  } catch {
-                    /* ignore */
-                  }
+                  try { await markRead(n.id) } catch { /* ignore */ }
                   openExamNoticeBooking({
                     flow: prepBookNotif ? 'prep' : 'graded_review',
                     courseId,
@@ -169,34 +196,22 @@ export default function Dashboard() {
               }
             }}
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              padding: '0.55rem 1.1rem',
-              borderRadius: 10,
-              border: 'none',
+              display: 'inline-flex', alignItems: 'center', gap: '0.45rem',
+              padding: '0.55rem 1.1rem', borderRadius: 10, border: 'none',
               background: 'linear-gradient(180deg, #f5a623 0%, #e09612 100%)',
-              color: '#1a2744',
-              fontWeight: 700,
-              fontSize: '0.88rem',
-              cursor: 'pointer',
+              color: '#1a2744', fontWeight: 700, fontSize: '0.88rem', cursor: 'pointer',
               boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
             }}
           >
-            {'Open UniBot & book'}
+            Open UniBot &amp; book
           </button>
         </section>
       )}
 
       {bookingsError && (
         <div style={{
-          background: '#fff5f5',
-          border: '1px solid #ffc9c9',
-          borderRadius: 10,
-          padding: '0.75rem 1rem',
-          marginBottom: '1rem',
-          fontSize: '0.85rem',
-          color: '#c0392b',
+          background: '#fff5f5', border: '1px solid #ffc9c9', borderRadius: 10,
+          padding: '0.75rem 1rem', marginBottom: '1rem', fontSize: '0.85rem', color: '#c0392b',
         }}>
           <p style={{ margin: 0 }}>{bookingsError}</p>
         </div>
@@ -206,255 +221,163 @@ export default function Dashboard() {
         <p style={{ fontSize: '0.87rem', color: '#aab8cc', marginBottom: '1rem' }}>Loading dashboard…</p>
       )}
 
-      <section style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-          <h2 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f1f3d', margin: 0 }}>Announcements</h2>
-          <span style={{ fontSize: '0.75rem', color: '#8fa3c4' }}>Faculty-wide notices</span>
-        </div>
-        <div style={{
-          background: '#fffbf0',
-          border: '1px solid #f5e6c0',
-          borderRadius: 10,
-          padding: '0.75rem 0.9rem',
-        }}
-        >
-          {announcementsError && (
-            <p style={{ fontSize: '0.8rem', color: '#c0392b', margin: '0 0 0.5rem 0' }}>{announcementsError}</p>
-          )}
-          {!announcementsError && announcements.length === 0 && !loading ? (
-            <p style={{ fontSize: '0.82rem', color: '#92570a', margin: 0, opacity: 0.85 }}>No announcements right now.</p>
-          ) : null}
-          {announcements.length > 0 ? (
-            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-              {announcements.map((a) => (
-                <li
-                  key={a.id}
-                  style={{
-                    background: '#fffef8',
-                    border: '1px solid #f0e4c4',
-                    borderRadius: 8,
-                    padding: '0.75rem 0.85rem',
-                  }}
-                >
-                  <p style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1a2744', margin: 0 }}>{a.title}</p>
-                  <p style={{ fontSize: '0.83rem', color: '#6b5a2d', margin: '0.35rem 0 0 0', lineHeight: 1.45 }}>{a.body}</p>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      </section>
+      {/* Two-column layout: Announcements + Notifications */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
 
-      <section style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-          <h2 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f1f3d', margin: 0 }}>Notifications</h2>
-          <span style={{ fontSize: '0.75rem', color: '#8fa3c4' }}>Booking alerts and system messages · use the bell for the full list</span>
-        </div>
-        <div style={{
-          background: '#fff',
-          border: '1px solid #e8ecf0',
-          borderRadius: 10,
-          padding: '0.75rem 0.9rem',
-        }}
-        >
-          {notifError && (
-            <p style={{ fontSize: '0.8rem', color: '#c0392b', margin: '0 0 0.5rem 0' }}>{notifError}</p>
-          )}
-          {notifLoading && !previewNotifs.length ? (
-            <p style={{ fontSize: '0.82rem', color: '#aab8cc', margin: 0 }}>Loading…</p>
-          ) : previewNotifs.length === 0 ? (
-            <p style={{ fontSize: '0.82rem', color: '#aab8cc', margin: 0 }}>No notifications yet.</p>
-          ) : (
-            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-              {previewNotifs.map((n) => (
-                <li
-                  key={n.id}
-                  style={{
-                    background: n.is_read ? '#fafbfc' : '#f8fbff',
-                    border: '1px solid #eaecf0',
-                    borderRadius: 8,
-                    padding: '0.5rem 0.65rem',
-                    fontSize: '0.8rem',
-                    color: '#4d6080',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    justifyContent: 'space-between',
-                    gap: '0.5rem',
-                  }}
-                >
-                  <span style={{ flex: 1, minWidth: 0 }}>{n.text}</span>
-                  {!n.is_read && (
-                    <button
-                      type="button"
-                      onClick={() => void markRead(n.id)}
-                      style={{
-                        flexShrink: 0,
-                        fontSize: '0.72rem',
-                        border: 'none',
-                        background: 'transparent',
-                        color: '#3b5bdb',
-                        cursor: 'pointer',
-                        textDecoration: 'underline',
-                        padding: 0,
-                      }}
-                    >
-                      Mark read
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
+        {/* Announcements */}
+        <section>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
+            <h2 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#0f1f3d', margin: 0 }}>Announcements</h2>
+            <span style={{ fontSize: '0.72rem', color: '#8fa3c4' }}>Faculty-wide</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+            {announcementsError && (
+              <p style={{ fontSize: '0.8rem', color: '#c0392b', margin: 0 }}>{announcementsError}</p>
+            )}
+            {!announcementsError && announcements.length === 0 && !loading && (
+              <div style={{
+                background: '#fff', border: '1px dashed #e8ecf0', borderRadius: 10,
+                padding: '1rem', fontSize: '0.82rem', color: '#8fa3c4', textAlign: 'center',
+              }}>
+                No announcements right now.
+              </div>
+            )}
+            {announcements.map((a) => (
+              <div key={a.id} style={{
+                background: '#fff',
+                border: '1px solid #e8ecf0',
+                borderLeft: '3px solid #f5a623',
+                borderRadius: 10,
+                padding: '0.8rem 0.95rem',
+                display: 'flex',
+                gap: '0.7rem',
+                alignItems: 'flex-start',
+              }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: 7, background: '#fff7e6',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '0.05rem',
+                }}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="#f5a623" aria-hidden>
+                    <path d="M18 11v2H6v-2h12m-1-4l-7 4 7 4V7M4 11v2H2v-2h2z" />
+                  </svg>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ fontWeight: 600, fontSize: '0.87rem', color: '#0f1f3d', margin: 0, lineHeight: 1.3 }}>{a.title}</p>
+                  <p style={{ fontSize: '0.8rem', color: '#6b7ea8', margin: '0.3rem 0 0 0', lineHeight: 1.5 }}>{a.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
 
-      <div style={{ marginBottom: '1.5rem' }}>
+        {/* Notifications */}
+        <section>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
+            <h2 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#0f1f3d', margin: 0 }}>Notifications</h2>
+            <span style={{ fontSize: '0.72rem', color: '#8fa3c4' }}>Bell for full list</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+            {notifError && (
+              <p style={{ fontSize: '0.8rem', color: '#c0392b', margin: 0 }}>{notifError}</p>
+            )}
+            {notifLoading && !previewNotifs.length && (
+              <p style={{ fontSize: '0.82rem', color: '#aab8cc', margin: 0 }}>Loading…</p>
+            )}
+            {!notifLoading && previewNotifs.length === 0 && (
+              <div style={{
+                background: '#fff', border: '1px dashed #e8ecf0', borderRadius: 10,
+                padding: '1rem', fontSize: '0.82rem', color: '#8fa3c4', textAlign: 'center',
+              }}>
+                No notifications yet.
+              </div>
+            )}
+            {previewNotifs.map((n) => (
+              <div key={n.id} style={{
+                background: n.is_read ? '#fff' : '#f8fbff',
+                border: `1px solid ${n.is_read ? '#e8ecf0' : '#c8d9f8'}`,
+                borderRadius: 10,
+                padding: '0.65rem 0.85rem',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.65rem',
+              }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%', flexShrink: 0, marginTop: '0.35rem',
+                  background: n.is_read ? '#d1d9e6' : '#3b5bdb',
+                }} />
+                <span style={{ flex: 1, fontSize: '0.8rem', color: n.is_read ? '#6b7ea8' : '#0f1f3d', lineHeight: 1.45, minWidth: 0 }}>
+                  {n.text}
+                </span>
+                {!n.is_read && (
+                  <button
+                    type="button"
+                    onClick={() => void markRead(n.id)}
+                    style={{
+                      flexShrink: 0, fontSize: '0.7rem', border: 'none', background: 'transparent',
+                      color: '#3b5bdb', cursor: 'pointer', padding: 0, fontWeight: 500,
+                    }}
+                  >
+                    ✓
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {/* Upcoming consultations */}
+      <section style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: '#0f1f3d', margin: 0 }}>
-            Upcoming consultations
-          </h2>
-          <Link
-            to="/student/bookings"
-            style={{ fontSize: '0.82rem', color: '#8fa3c4', textDecoration: 'none' }}
-          >
-            All bookings &rarr;
+          <h2 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f1f3d', margin: 0 }}>Upcoming consultations</h2>
+          <Link to="/student/bookings" style={{ fontSize: '0.8rem', color: '#8fa3c4', textDecoration: 'none', fontWeight: 500 }}>
+            {upcomingCount > 2 ? `See all ${upcomingCount} →` : 'All bookings →'}
           </Link>
         </div>
 
-        {!bookingsError && upcoming.length === 0 && !loading ? (
+        {!bookingsError && upcomingCount === 0 && !loading ? (
           <div style={{
-            background: '#fff',
-            border: '1px dashed #d1d9e6',
-            borderRadius: 10,
-            padding: '1rem 1.1rem',
-            fontSize: '0.87rem',
-            color: '#6b7ea8',
+            background: '#fff', border: '1px dashed #d1d9e6', borderRadius: 12,
+            padding: '1.25rem 1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: '1rem', flexWrap: 'wrap',
           }}>
-            <p style={{ margin: '0 0 0.65rem 0' }}>No upcoming consultations.</p>
+            <p style={{ fontSize: '0.87rem', color: '#6b7ea8', margin: 0 }}>No upcoming consultations scheduled.</p>
             <Link
               to="/student/chat"
               style={{
-                display: 'inline-block',
-                background: '#1a2744',
-                color: '#fff',
-                padding: '0.45rem 0.9rem',
-                borderRadius: 8,
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                textDecoration: 'none',
+                display: 'inline-block', background: '#1a2744', color: '#fff',
+                padding: '0.45rem 0.9rem', borderRadius: 8, fontSize: '0.82rem',
+                fontWeight: 600, textDecoration: 'none',
               }}
             >
               Book via chat
             </Link>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '0.75rem' }}>
-            {upcoming.map((b) => {
-              const typeStyle = b.consultation_type
-                ? (TYPE_COLOR[b.consultation_type] ?? { bg: '#f1f3f6', color: '#4d6080' })
-                : { bg: '#f1f3f6', color: '#4d6080' }
-              const subj = dashSubject(b)
-              const topic = dashTopic(b)
-              return (
-                <div key={b.id} style={{
-                  background: '#fff',
-                  border: '1px solid #e8ecf0',
-                  borderRadius: 12,
-                  padding: '0.85rem 1rem',
-                  minWidth: 0,
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-                    <p style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f1f3d', margin: 0, lineHeight: 1.35, minWidth: 0 }}>
-                      {b.professor_name ?? 'Unassigned'}
-                    </p>
-                    {b.consultation_type && (
-                      <span style={{
-                        fontSize: '0.68rem',
-                        fontWeight: 500,
-                        padding: '0.18rem 0.5rem',
-                        borderRadius: 20,
-                        background: typeStyle.bg,
-                        color: typeStyle.color,
-                        flexShrink: 0,
-                      }}>
-                        {TYPE_LABEL[b.consultation_type] ?? b.consultation_type}
-                      </span>
-                    )}
-                  </div>
-
-                  {subj ? (
-                    <div style={{ marginTop: '0.45rem' }}>
-                      <p style={dashMeta}>Subject</p>
-                      <p style={{ fontSize: '0.78rem', color: '#3d4f66', margin: 0, fontWeight: 500, lineHeight: 1.35 }}>{subj}</p>
-                    </div>
-                  ) : null}
-                  {b.hall ? (
-                    <div style={{ marginTop: '0.35rem' }}>
-                      <p style={dashMeta}>Hall</p>
-                      <p style={{ fontSize: '0.78rem', color: '#4d6080', margin: 0, lineHeight: 1.35 }}>{b.hall}</p>
-                    </div>
-                  ) : null}
-                  {topic ? (
-                    <div style={{
-                      marginTop: '0.4rem',
-                      background: '#f8f9fb',
-                      borderRadius: 6,
-                      padding: '0.4rem 0.55rem',
-                      border: '1px solid #eaecf0',
-                    }}
-                    >
-                      <p style={dashMeta}>Topic</p>
-                      <p style={{
-                        fontSize: '0.76rem',
-                        color: '#4d6080',
-                        margin: 0,
-                        lineHeight: 1.35,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                      }}
-                      >
-                        {topic}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  {b.session_date && (
-                    <div style={{
-                      marginTop: '0.55rem',
-                      paddingTop: '0.5rem',
-                      borderTop: '1px solid #f0f2f5',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                      fontSize: '0.8rem',
-                      color: '#4d6080',
-                    }}
-                    >
-                      <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style={{ opacity: 0.55, flexShrink: 0 }}>
-                        <path d="M19 3h-1V1h-2v2H8V1H6v2H5C3.89 3 3 3.9 3 5v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z" />
-                      </svg>
-                      {formatDate(b.session_date, b.time_from, b.time_to)}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '0.85rem' }}>
+            {upcomingPreview.map((b) => (
+              <BookingCard
+                key={b.id}
+                consultationType={b.consultation_type}
+                primaryLabel="Professor"
+                primaryName={b.professor_name ?? 'Unassigned'}
+                subject={dashSubject(b)}
+                hall={b.hall}
+                topic={dashTopic(b)}
+                sessionDate={b.session_date}
+                timeFrom={b.time_from}
+                timeTo={b.time_to}
+              />
+            ))}
           </div>
         )}
-      </div>
+      </section>
 
+      {/* CTA bar */}
       <div style={{
-        background: '#1a2744',
-        borderRadius: 12,
-        padding: '1.1rem 1.5rem',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '1rem',
-        flexWrap: 'wrap',
+        background: '#1a2744', borderRadius: 12, padding: '1.1rem 1.5rem',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: '1rem', flexWrap: 'wrap',
       }}>
         <div>
           <p style={{ fontWeight: 600, fontSize: '0.95rem', color: '#fff', margin: 0 }}>
@@ -467,15 +390,9 @@ export default function Dashboard() {
         <Link
           to="/student/chat"
           style={{
-            background: '#f5a623',
-            color: '#fff',
-            padding: '0.55rem 1.1rem',
-            borderRadius: 8,
-            fontSize: '0.85rem',
-            fontWeight: 600,
-            textDecoration: 'none',
-            whiteSpace: 'nowrap',
-            flexShrink: 0,
+            background: '#f5a623', color: '#fff', padding: '0.55rem 1.1rem',
+            borderRadius: 8, fontSize: '0.85rem', fontWeight: 600,
+            textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0,
           }}
         >
           Open booking chat

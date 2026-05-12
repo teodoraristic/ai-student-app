@@ -101,7 +101,6 @@ async def create_booking(
     student: User,
     session_id: int,
     task: str | None,
-    anonymous_question: str | None,
     group_size: int,
 ) -> Booking:
     cs = (
@@ -153,7 +152,6 @@ async def create_booking(
         student_id=student.id,
         session_id=session_id,
         task=task,
-        anonymous_question=anonymous_question,
         group_size=group_size,
         status=BookingStatus.active,
         priority=BookingPriority.normal,
@@ -253,7 +251,6 @@ async def try_promote_one_waitlist_entry(
             student=stu,
             session_id=session_id,
             task=None,
-            anonymous_question=None,
             group_size=1,
         )
     except ValueError:

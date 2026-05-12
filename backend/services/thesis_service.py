@@ -128,7 +128,6 @@ async def list_thesis_consultation_history(session: AsyncSession, student: User)
                 "course_name": course.name if course else None,
                 "hall": hall_default,
                 "task": b.task,
-                "anonymous_question": b.anonymous_question,
                 "has_feedback": has_feedback,
                 "booked_at": b.created_at.isoformat(),
             }
@@ -165,13 +164,11 @@ async def try_auto_book_thesis_intro_session(
         return
     if not slots:
         return
-    preview = (topic_description or "").strip()[:500] or None
     b = await booking_service.create_booking(
         session,
         student=student,
         session_id=slots[0].id,
         task="Thesis consultation",
-        anonymous_question=preview,
         group_size=1,
     )
     cs = slots[0]

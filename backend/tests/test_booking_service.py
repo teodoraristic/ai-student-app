@@ -39,7 +39,6 @@ class TestCreateBooking:
                 student=student,
                 session_id=cs.id,
                 task=None,
-                anonymous_question=None,
                 group_size=1,
             )
 
@@ -53,7 +52,6 @@ class TestCreateBooking:
             student=student,
             session_id=cs.id,
             task="SQL joins",
-            anonymous_question="How does LEFT JOIN work?",
             group_size=1,
         )
 
@@ -75,7 +73,6 @@ class TestCreateBooking:
                 student=student,
                 session_id=cs.id,
                 task=None,
-                anonymous_question=None,
                 group_size=1,
             )
 
@@ -88,7 +85,6 @@ class TestCreateBooking:
             student=student,
             session_id=cs.id,
             task="A",
-            anonymous_question=None,
             group_size=1,
         )
         await booking_service.cancel_booking(db, student=student, booking_id=b1.id)
@@ -98,7 +94,6 @@ class TestCreateBooking:
             student=student,
             session_id=cs.id,
             task="B",
-            anonymous_question=None,
             group_size=1,
         )
         assert b2.id != b1.id
@@ -115,7 +110,6 @@ class TestCreateBooking:
                 student=student,
                 session_id=cs.id,
                 task=None,
-                anonymous_question=None,
                 group_size=3,
             )
 
@@ -137,7 +131,6 @@ class TestCreateBooking:
                 student=student,
                 session_id=cs.id,
                 task=None,
-                anonymous_question=None,
                 group_size=1,
             )
 
@@ -148,7 +141,6 @@ class TestCreateBooking:
                 student=student,
                 session_id=99999,
                 task=None,
-                anonymous_question=None,
                 group_size=1,
             )
 
@@ -178,7 +170,6 @@ class TestCreateBooking:
             student=student,
             session_id=cs.id,
             task=None,
-            anonymous_question=None,
             group_size=1,
         )
 
@@ -206,7 +197,6 @@ class TestCreateBooking:
             student=student,
             session_id=cs.id,
             task=None,
-            anonymous_question=None,
             group_size=1,
         )
 
@@ -230,7 +220,7 @@ class TestCancelBooking:
         await db.flush()
         b = await booking_service.create_booking(
             db, student=student, session_id=cs.id,
-            task=None, anonymous_question=None, group_size=1,
+            task=None, group_size=1,
         )
 
         cancelled = await booking_service.cancel_booking(db, student=student, booking_id=b.id)
@@ -272,7 +262,7 @@ class TestCancelBooking:
         # Student books
         b = await booking_service.create_booking(
             db, student=student, session_id=cs.id,
-            task=None, anonymous_question=None, group_size=1,
+            task=None, group_size=1,
         )
 
         # Other student on waitlist
@@ -335,7 +325,7 @@ class TestCancelBooking:
 
         b = await booking_service.create_booking(
             db, student=student, session_id=cs.id,
-            task=None, anonymous_question=None, group_size=1,
+            task=None, group_size=1,
         )
 
         wl = Waitlist(
@@ -397,7 +387,7 @@ class TestCancelBooking:
 
         b = await booking_service.create_booking(
             db, student=student, session_id=cs.id,
-            task=None, anonymous_question=None, group_size=1,
+            task=None, group_size=1,
         )
 
         wl = Waitlist(

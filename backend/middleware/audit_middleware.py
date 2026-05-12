@@ -1,10 +1,11 @@
 """Record audit log entries for mutating HTTP methods."""
 
 import logging
+import re
 from typing import Callable
 
 from fastapi import Request, Response
-from jose import JWTError, jwt
+import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.config import get_settings
@@ -41,9 +42,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
                     algorithms=[settings.jwt_algorithm],
                 )
                 user_id = int(payload.get("sub", 0)) or None
-            except (JWTError, ValueError, TypeError):
+            except (jwt.PyJWTError, ValueError, TypeError):
                 user_id = None
 
+        m = re.search(r"/(\d+)", path)
+        entity_id = int(m.group(1)) if m else None
         try:
             async with async_session_maker() as session:
                 session.add(
@@ -51,8 +54,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
                         user_id=user_id,
                         action=request.method,
                         entity_type="http",
-                        entity_id=None,
-                        detail={"path": path},
+                        entity_id=entity_id,
+                        detail={"path": path, "status": response.status_code},
                     )
                 )
                 await session.commit()

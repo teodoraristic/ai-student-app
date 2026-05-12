@@ -18,7 +18,6 @@ import Calendar from './pages/Calendar'
 import ProfessorDashboard from './pages/professor/Dashboard'
 import ProfessorWindows from './pages/professor/Windows'
 import ProfessorBookings from './pages/professor/Bookings'
-import ProfessorRequests from './pages/professor/Requests'
 import ThesisApplications from './pages/professor/ThesisApplications'
 import ProfessorStats from './pages/professor/Stats'
 import ProfessorExams from './pages/professor/Exams'
@@ -62,7 +61,6 @@ const profNav = [
   { to: '/professor/bookings', label: 'Bookings' },
   { to: '/professor/exams', label: 'Exams' },
   { to: '/professor/calendar', label: 'Calendar' },
-  { to: '/professor/requests', label: 'Requests' },
   { to: '/professor/thesis', label: 'Thesis apps' },
   { to: '/professor/stats', label: 'Stats' },
 ]
@@ -140,7 +138,6 @@ export default function App() {
         <Route path="windows" element={<ProfessorWindows />} />
         <Route path="bookings" element={<ProfessorBookings />} />
         <Route path="calendar" element={<Calendar />} />
-        <Route path="requests" element={<ProfessorRequests />} />
         <Route path="thesis" element={<ThesisApplications />} />
         <Route path="stats" element={<ProfessorStats />} />
         <Route path="exams" element={<ProfessorExams />} />

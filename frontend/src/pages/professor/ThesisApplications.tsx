@@ -8,15 +8,8 @@ function detailMessage(e: unknown, fallback: string): string {
   return typeof d === 'string' ? d : fallback
 }
 
-function topicBlock(text: string | null | undefined) {
-  if (text?.trim()) {
-    return <span>{text}</span>
-  }
-  return <span style={{ color: '#aab8cc' }}>No topic text provided.</span>
-}
-
 export default function ThesisApplications() {
-  const { pending, mentees, loading, error, reload, respond } = useProfessorThesisInbox()
+  const { pending, mentees, loading, error, respond } = useProfessorThesisInbox()
   const [busyId, setBusyId] = useState<number | null>(null)
   const [actionErr, setActionErr] = useState<string | null>(null)
 
@@ -34,53 +27,37 @@ export default function ThesisApplications() {
 
   return (
     <div style={U.shell}>
-      <div style={{ ...U.pageHeader, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={U.title}>Thesis</h1>
-          <p style={U.subtitle}>Students you supervise and new applications you can accept or decline.</p>
-        </div>
-        <button type="button" onClick={() => void reload()} disabled={loading} style={{ ...U.btnSecondary, opacity: loading ? 0.7 : 1, cursor: loading ? 'wait' : 'pointer' }}>
-          Refresh
-        </button>
+      <div style={{ ...U.pageHeader, marginBottom: '1.5rem' }}>
+        <h1 style={U.title}>Thesis</h1>
+        <p style={U.subtitle}>Students you supervise and new applications to review.</p>
       </div>
 
       {loading && <p style={{ fontSize: '0.85rem', color: '#aab8cc', marginBottom: '1rem' }}>Loading…</p>}
       {(error || actionErr) && (
-        <p style={{ fontSize: '0.85rem', color: '#c0392b', marginBottom: '1rem' }}>{actionErr ?? error}</p>
+        <div style={{ ...U.cardMuted, marginBottom: '1rem', borderColor: '#ffc9c9', background: '#fff5f5', color: '#c0392b', fontSize: '0.85rem' }}>
+          {actionErr ?? error}
+        </div>
       )}
 
-      {!loading && mentees.length > 0 && (
-        <section style={U.sectionBlock}>
-          <h2 style={{ ...U.sectionTitle, marginBottom: '0.65rem' }}>Your thesis students</h2>
-          <p style={{ fontSize: '0.8rem', color: '#6b7ea8', margin: '0 0 1rem 0', lineHeight: 1.45 }}>
-            Active supervision — topic as submitted when the application was approved.
-          </p>
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, ...U.cardGrid }}>
-            {mentees.map((m) => (
-              <li key={m.application_id} style={{ ...U.card, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <p style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f1f3d', margin: 0, lineHeight: 1.3 }}>{m.student_name}</p>
-                <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.45rem 0.55rem' }}>
-                  <p style={{ fontSize: '0.68rem', fontWeight: 600, color: '#8fa3c4', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.25rem 0' }}>Thesis theme</p>
-                  <p style={{ fontSize: '0.82rem', color: '#4d6080', margin: 0, lineHeight: 1.45 }}>{topicBlock(m.topic_description)}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {!loading && mentees.length === 0 && !error && (
-        <section style={U.sectionBlock}>
-          <h2 style={{ ...U.sectionTitle, marginBottom: '0.65rem' }}>Your thesis students</h2>
-          <div style={U.emptyState}>
-            <p style={{ margin: 0 }}>No active thesis students yet — approved applications will appear here.</p>
-          </div>
-        </section>
-      )}
-
+      {/* Pending applications */}
       {!loading && (
         <section style={U.sectionBlock}>
-          <h2 style={{ ...U.sectionTitle, marginBottom: '0.65rem' }}>Pending applications</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+            <h2 style={{ ...U.sectionTitle, margin: 0 }}>Pending applications</h2>
+            {pending.length > 0 && (
+              <span style={{
+                fontSize: '0.7rem',
+                fontWeight: 700,
+                padding: '0.15rem 0.5rem',
+                borderRadius: 20,
+                background: '#fffbf0',
+                color: '#92570a',
+                border: '1px solid #f5e6c0',
+              }}>
+                {pending.length}
+              </span>
+            )}
+          </div>
           {pending.length === 0 ? (
             <div style={U.emptyState}>
               <p style={{ margin: 0 }}>No applications waiting for your decision.</p>
@@ -90,17 +67,36 @@ export default function ThesisApplications() {
               {pending.map((r) => {
                 const busy = busyId === r.id
                 return (
-                  <li key={r.id} style={{ ...U.card, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    <p style={{ fontWeight: 600, fontSize: '0.88rem', color: '#0f1f3d', margin: 0, lineHeight: 1.3 }}>{r.student_name}</p>
-                    <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.45rem 0.55rem' }}>
-                      <p style={{ fontSize: '0.68rem', fontWeight: 600, color: '#8fa3c4', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.25rem 0' }}>Proposed topic</p>
-                      <p style={{ fontSize: '0.82rem', color: '#4d6080', margin: 0, lineHeight: 1.45 }}>{topicBlock(r.topic_description)}</p>
+                  <li key={r.id} style={{ ...U.card, display: 'flex', flexDirection: 'column', gap: '0.65rem', borderTop: '3px solid #f5a623' }}>
+                    <div>
+                      <p style={{ fontWeight: 600, fontSize: '0.9rem', color: '#0f1f3d', margin: 0 }}>{r.student_name}</p>
+                      <span style={{
+                        display: 'inline-block',
+                        marginTop: '0.3rem',
+                        fontSize: '0.68rem',
+                        fontWeight: 600,
+                        padding: '0.18rem 0.5rem',
+                        borderRadius: 20,
+                        background: '#fffbf0',
+                        color: '#92570a',
+                        border: '1px solid #f5e6c0',
+                      }}>
+                        Awaiting response
+                      </span>
                     </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.35rem' }}>
+                    {r.topic_description?.trim() ? (
+                      <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.5rem 0.65rem' }}>
+                        <p style={U.meta}>Proposed topic</p>
+                        <p style={{ fontSize: '0.82rem', color: '#4d6080', margin: 0, lineHeight: 1.5 }}>{r.topic_description}</p>
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: '0.82rem', color: '#aab8cc', margin: 0 }}>No topic text provided.</p>
+                    )}
+                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto', flexWrap: 'wrap' }}>
                       <button
                         type="button"
                         disabled={busy}
-                        style={{ ...U.btnSuccess, opacity: busy ? 0.65 : 1, cursor: busy ? 'wait' : 'pointer' }}
+                        style={{ ...U.btnSuccess, flex: 1, justifyContent: 'center', display: 'flex', opacity: busy ? 0.65 : 1, cursor: busy ? 'wait' : 'pointer' }}
                         onClick={() => void onRespond(r.id, true)}
                       >
                         Accept
@@ -108,7 +104,7 @@ export default function ThesisApplications() {
                       <button
                         type="button"
                         disabled={busy}
-                        style={{ ...U.btnDangerOutline, opacity: busy ? 0.65 : 1, cursor: busy ? 'wait' : 'pointer' }}
+                        style={{ ...U.btnDangerOutline, flex: 1, justifyContent: 'center', display: 'flex', opacity: busy ? 0.65 : 1, cursor: busy ? 'wait' : 'pointer' }}
                         onClick={() => void onRespond(r.id, false)}
                       >
                         Decline
@@ -117,6 +113,62 @@ export default function ThesisApplications() {
                   </li>
                 )
               })}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* Active mentees */}
+      {!loading && (
+        <section style={U.sectionBlock}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+            <h2 style={{ ...U.sectionTitle, margin: 0 }}>Your thesis students</h2>
+            {mentees.length > 0 && (
+              <span style={{
+                fontSize: '0.7rem',
+                fontWeight: 700,
+                padding: '0.15rem 0.5rem',
+                borderRadius: 20,
+                background: '#e6f7ee',
+                color: '#1a7a4a',
+                border: '1px solid #b8e8cc',
+              }}>
+                {mentees.length}
+              </span>
+            )}
+          </div>
+          {mentees.length === 0 ? (
+            <div style={U.emptyState}>
+              <p style={{ margin: 0 }}>No active thesis students yet — approved applications will appear here.</p>
+            </div>
+          ) : (
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, ...U.cardGrid }}>
+              {mentees.map((m) => (
+                <li key={m.application_id} style={{ ...U.card, display: 'flex', flexDirection: 'column', gap: '0.65rem', borderTop: '3px solid #2a9960' }}>
+                  <div>
+                    <p style={{ fontWeight: 600, fontSize: '0.9rem', color: '#0f1f3d', margin: 0 }}>{m.student_name}</p>
+                    <span style={{
+                      display: 'inline-block',
+                      marginTop: '0.3rem',
+                      fontSize: '0.68rem',
+                      fontWeight: 600,
+                      padding: '0.18rem 0.5rem',
+                      borderRadius: 20,
+                      background: '#e6f7ee',
+                      color: '#1a7a4a',
+                      border: '1px solid #b8e8cc',
+                    }}>
+                      Active supervision
+                    </span>
+                  </div>
+                  {m.topic_description?.trim() ? (
+                    <div style={{ background: '#f8f9fb', border: '1px solid #eaecf0', borderRadius: 8, padding: '0.5rem 0.65rem' }}>
+                      <p style={U.meta}>Thesis theme</p>
+                      <p style={{ fontSize: '0.82rem', color: '#4d6080', margin: 0, lineHeight: 1.5 }}>{m.topic_description}</p>
+                    </div>
+                  ) : null}
+                </li>
+              ))}
             </ul>
           )}
         </section>

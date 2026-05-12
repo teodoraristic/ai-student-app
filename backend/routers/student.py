@@ -172,7 +172,6 @@ async def student_announcements(
 class BookingCreate(BaseModel):
     session_id: int
     task: Optional[str] = None
-    anonymous_question: Optional[str] = None
 
 
 class ThesisApplyBody(BaseModel):
@@ -285,7 +284,6 @@ async def create_booking(
             student=user,
             session_id=body.session_id,
             task=body.task,
-            anonymous_question=body.anonymous_question,
             group_size=1,
         )
         await db.commit()
@@ -361,7 +359,6 @@ async def my_bookings(
                 "course_name": course.name if course else None,
                 "hall": hall or None,
                 "task": b.task,
-                "anonymous_question": b.anonymous_question,
                 "has_feedback": has_feedback,
                 "general_group_attendees": general_group_attendees,
                 "general_group_capacity": general_group_capacity,

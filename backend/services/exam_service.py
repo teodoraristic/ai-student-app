@@ -1,11 +1,11 @@
-"""Exam periods, academic events, registrations, and professor exam notifications."""
+"""Academic events, registrations, and professor exam notifications."""
 
 from __future__ import annotations
 
 import logging
 from calendar import monthrange
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,6 @@ from backend.db.models import (
     CourseProfessor,
     CourseStudent,
     CourseStudentStatus,
-    ExamPeriod,
     ExamRegistration,
     ExamRegistrationStatus,
     ProfessorAnnouncement,
@@ -57,8 +56,6 @@ async def patch_academic_event(
     session: AsyncSession,
     event_id: int,
     updates: dict[str, Any],
-    *,
-    clear_exam_period: bool = False,
 ) -> AcademicEvent:
     """Apply only keys present in ``updates`` (API field names: type, date, ...)."""
     ev = await session.get(AcademicEvent, event_id)
@@ -82,40 +79,10 @@ async def patch_academic_event(
         ev.time_to = updates["time_to"]
     if "hall" in updates:
         ev.hall = updates["hall"]
-    if clear_exam_period:
-        ev.exam_period_id = None
-    elif "exam_period_id" in updates:
-        ev.exam_period_id = updates["exam_period_id"]
     if "academic_year" in updates:
         ev.academic_year = updates["academic_year"]
-    if ev.event_type == AcademicEventType.midterm:
-        ev.exam_period_id = None
-    ep_id = None if ev.event_type == AcademicEventType.midterm else ev.exam_period_id
-    await validate_academic_event_fields(
-        session,
-        event_type=ev.event_type,
-        event_date=ev.event_date,
-        exam_period_id=ep_id,
-    )
     await session.flush()
     return ev
-
-
-async def validate_academic_event_fields(
-    session: AsyncSession,
-    *,
-    event_type: AcademicEventType,
-    event_date: date,
-    exam_period_id: Optional[int],
-) -> None:
-    if event_type == AcademicEventType.midterm and exam_period_id is not None:
-        raise ValueError("Midterm exams must not be linked to an exam period")
-    if exam_period_id is not None:
-        ep = await session.get(ExamPeriod, exam_period_id)
-        if not ep:
-            raise ValueError("Invalid exam period")
-        if not (ep.date_from <= event_date <= ep.date_to):
-            raise ValueError("Exam date must fall within the selected exam period")
 
 
 async def _student_active_enrollment(
@@ -184,11 +151,6 @@ async def list_student_eligible_exams(session: AsyncSession, student_id: int) ->
             )
         )
         prof_name = await _primary_professor_name(session, course.id, ev.academic_year)
-        period_name: str | None = None
-        if ev.exam_period_id:
-            ep = await session.get(ExamPeriod, ev.exam_period_id)
-            if ep:
-                period_name = ep.name
         out.append(
             {
                 "academic_event_id": ev.id,
@@ -201,7 +163,6 @@ async def list_student_eligible_exams(session: AsyncSession, student_id: int) ->
                 "time_from": ev.time_from.isoformat() if ev.time_from else None,
                 "time_to": ev.time_to.isoformat() if ev.time_to else None,
                 "hall": ev.hall,
-                "exam_period_name": period_name,
                 "lecturer_name": prof_name,
                 "registration_count": int(count_reg or 0),
                 "already_registered": is_registered,
@@ -224,11 +185,6 @@ async def list_student_registrations(session: AsyncSession, student_id: int) -> 
     rows = list((await session.execute(q)).all())
     out: list[dict[str, Any]] = []
     for reg, ev, course in rows:
-        period_name: str | None = None
-        if ev.exam_period_id:
-            ep = await session.get(ExamPeriod, ev.exam_period_id)
-            if ep:
-                period_name = ep.name
         prof_name = await _primary_professor_name(session, course.id, ev.academic_year)
         out.append(
             {
@@ -243,7 +199,6 @@ async def list_student_registrations(session: AsyncSession, student_id: int) -> 
                 "time_from": ev.time_from.isoformat() if ev.time_from else None,
                 "time_to": ev.time_to.isoformat() if ev.time_to else None,
                 "hall": ev.hall,
-                "exam_period_name": period_name,
                 "lecturer_name": prof_name,
                 "can_cancel": reg.status == ExamRegistrationStatus.registered
                 and _registration_deadline_ok(ev.event_date),

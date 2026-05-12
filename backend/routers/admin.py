@@ -20,7 +20,6 @@ from backend.db.models import (
     CourseProfessor,
     CourseStudent,
     CourseStudentStatus,
-    ExamPeriod,
     KnowledgeBase,
     SchedulerLog,
     SchedulerLogStatus,
@@ -235,7 +234,6 @@ async def list_events(
             "time_from": r.time_from.isoformat() if r.time_from else None,
             "time_to": r.time_to.isoformat() if r.time_to else None,
             "hall": r.hall,
-            "exam_period_id": r.exam_period_id,
         }
         for r in rows
     ]
@@ -250,7 +248,6 @@ class EventBody(BaseModel):
     time_from: Optional[time] = None
     time_to: Optional[time] = None
     hall: Optional[str] = None
-    exam_period_id: Optional[int] = None
 
 
 @router.post("/events")
@@ -259,16 +256,6 @@ async def add_event(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin)),
 ):
-    ep_id = None if body.type == AcademicEventType.midterm else body.exam_period_id
-    try:
-        await exam_service.validate_academic_event_fields(
-            db,
-            event_type=body.type,
-            event_date=body.date,
-            exam_period_id=ep_id,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
     e = AcademicEvent(
         course_id=body.course_id,
         event_type=body.type,
@@ -278,7 +265,6 @@ async def add_event(
         time_from=body.time_from,
         time_to=body.time_to,
         hall=body.hall,
-        exam_period_id=ep_id,
     )
     db.add(e)
     await db.commit()
@@ -294,8 +280,6 @@ class EventPatch(BaseModel):
     time_from: Optional[time] = None
     time_to: Optional[time] = None
     hall: Optional[str] = None
-    exam_period_id: Optional[int] = None
-    clear_exam_period: bool = False
 
 
 @router.patch("/events/{event_id}")
@@ -306,9 +290,8 @@ async def patch_event(
     _: User = Depends(require_role(UserRole.admin)),
 ):
     raw = body.model_dump(exclude_unset=True)
-    clear = bool(raw.pop("clear_exam_period", False))
     try:
-        await exam_service.patch_academic_event(db, event_id, raw, clear_exam_period=clear)
+        await exam_service.patch_academic_event(db, event_id, raw)
         await db.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -324,58 +307,6 @@ async def del_event(
     res = await db.execute(delete(AcademicEvent).where(AcademicEvent.id == event_id))
     if res.rowcount == 0:
         raise HTTPException(status_code=404)
-    await db.commit()
-    return {"ok": True}
-
-
-@router.get("/exam-period")
-async def list_exam_periods(
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(UserRole.admin)),
-):
-    rows = list((await db.scalars(select(ExamPeriod))).all())
-    return [
-        {"id": r.id, "date_from": r.date_from.isoformat(), "date_to": r.date_to.isoformat(), "name": r.name}
-        for r in rows
-    ]
-
-
-class ExamPeriodBody(BaseModel):
-    date_from: date
-    date_to: date
-    name: str
-
-
-@router.post("/exam-period")
-async def add_exam_period(
-    body: ExamPeriodBody,
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(UserRole.admin)),
-):
-    ep = ExamPeriod(date_from=body.date_from, date_to=body.date_to, name=body.name)
-    db.add(ep)
-    await db.commit()
-    return {"id": ep.id}
-
-
-class ExamPeriodPatch(BaseModel):
-    date_from: Optional[date] = None
-    date_to: Optional[date] = None
-    name: Optional[str] = None
-
-
-@router.patch("/exam-period/{period_id}")
-async def patch_exam_period(
-    period_id: int,
-    body: ExamPeriodPatch,
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(UserRole.admin)),
-):
-    ep = await db.get(ExamPeriod, period_id)
-    if not ep:
-        raise HTTPException(status_code=404)
-    for k, v in body.model_dump(exclude_unset=True).items():
-        setattr(ep, k, v)
     await db.commit()
     return {"ok": True}
 

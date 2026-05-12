@@ -8,40 +8,11 @@ from backend.db.models import (
     AcademicEvent,
     AcademicEventType,
     ConsultationWindow,
-    ExamPeriod,
     ExamRegistration,
     ExamRegistrationStatus,
     WindowType,
 )
 from backend.services import exam_service
-
-
-@pytest.mark.asyncio
-async def test_validate_midterm_rejects_exam_period(db, course):
-    ep = ExamPeriod(date_from=date.today(), date_to=date.today() + timedelta(days=30), name="P")
-    db.add(ep)
-    await db.flush()
-    with pytest.raises(ValueError, match="Midterm"):
-        await exam_service.validate_academic_event_fields(
-            db,
-            event_type=AcademicEventType.midterm,
-            event_date=date.today() + timedelta(days=5),
-            exam_period_id=ep.id,
-        )
-
-
-@pytest.mark.asyncio
-async def test_validate_exam_date_outside_period(db, course):
-    ep = ExamPeriod(date_from=date.today() + timedelta(days=20), date_to=date.today() + timedelta(days=25), name="P")
-    db.add(ep)
-    await db.flush()
-    with pytest.raises(ValueError, match="within"):
-        await exam_service.validate_academic_event_fields(
-            db,
-            event_type=AcademicEventType.exam,
-            event_date=date.today() + timedelta(days=5),
-            exam_period_id=ep.id,
-        )
 
 
 @pytest.mark.asyncio
@@ -166,21 +137,16 @@ async def test_suggest_preparation_before_event(db, professor, course, enrolled)
 
 
 @pytest.mark.asyncio
-async def test_patch_midterm_clears_period(db, course):
-    ep = ExamPeriod(date_from=date.today() - timedelta(days=1), date_to=date.today() + timedelta(days=60), name="P")
-    db.add(ep)
-    await db.flush()
+async def test_patch_event_type(db, course):
     ev = AcademicEvent(
         course_id=course.id,
         event_type=AcademicEventType.exam,
         event_date=date.today() + timedelta(days=10),
         name="E",
         academic_year="2025/2026",
-        exam_period_id=ep.id,
     )
     db.add(ev)
     await db.flush()
     await exam_service.patch_academic_event(db, ev.id, {"type": AcademicEventType.midterm})
     await db.refresh(ev)
-    assert ev.exam_period_id is None
     assert ev.event_type == AcademicEventType.midterm

@@ -211,7 +211,6 @@ export default function Exams() {
               <th style={th}>Course</th>
               <th style={th}>Type</th>
               <th style={th}>Exam</th>
-              <th style={th}>Period</th>
               <th style={th}>Lecturer</th>
               <th style={th}>Signed up</th>
             </tr>
@@ -219,7 +218,7 @@ export default function Exams() {
           <tbody>
             {eligible.length === 0 && !loading ? (
               <tr>
-                <td colSpan={8} style={{ ...td, color: '#6b7ea8' }}>
+                <td colSpan={7} style={{ ...td, color: '#6b7ea8' }}>
                   No upcoming exams for your courses.
                 </td>
               </tr>
@@ -257,7 +256,6 @@ export default function Exams() {
                     <div style={{ fontWeight: 600 }}>{r.event_name}</div>
                     <div style={{ fontSize: '0.78rem', color: '#6b7ea8', marginTop: 2 }}>{formatDate(r.event_date)}</div>
                   </td>
-                  <td style={td}>{r.exam_period_name ?? '—'}</td>
                   <td style={td}>{r.lecturer_name ?? '—'}</td>
                   <td style={td}>{r.registration_count}</td>
                 </tr>
@@ -273,7 +271,6 @@ export default function Exams() {
           <thead>
             <tr>
               <th style={th} />
-              <th style={th}>Period</th>
               <th style={th}>Code</th>
               <th style={th}>Course</th>
               <th style={th}>Exam</th>
@@ -286,7 +283,7 @@ export default function Exams() {
           <tbody>
             {registrations.filter((x) => x.status === 'REGISTERED').length === 0 && !loading ? (
               <tr>
-                <td colSpan={9} style={{ ...td, color: '#6b7ea8' }}>
+                <td colSpan={8} style={{ ...td, color: '#6b7ea8' }}>
                   You have no active exam registrations.
                 </td>
               </tr>
@@ -318,7 +315,6 @@ export default function Exams() {
                         <span style={{ fontSize: '0.78rem', color: '#8fa3c4' }}>—</span>
                       )}
                     </td>
-                    <td style={td}>{r.exam_period_name ?? '—'}</td>
                     <td style={td}>{r.course_code}</td>
                     <td style={td}>{r.course_name}</td>
                     <td style={td}>{r.event_name}</td>

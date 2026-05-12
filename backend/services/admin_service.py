@@ -10,10 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import (
     Announcement,
-    AcademicEvent,
-    Course,
-    ExamPeriod,
-    KnowledgeBase,
     Notification,
     ProfessorProfile,
     SystemConfig,

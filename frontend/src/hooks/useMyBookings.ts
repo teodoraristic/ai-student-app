@@ -15,7 +15,6 @@ export type MyBookingRow = {
   course_name: string | null
   hall: string | null
   task: string | null
-  anonymous_question: string | null
   has_feedback: boolean
   /** General multi-seat sessions only: active seats (sum of group sizes) and room max. */
   general_group_attendees: number | null

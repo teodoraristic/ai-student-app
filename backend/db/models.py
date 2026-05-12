@@ -217,15 +217,6 @@ class ExtraSlot(Base):
     )
 
 
-class ExamPeriod(Base):
-    __tablename__ = "exam_periods"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    date_from: Mapped[date] = mapped_column(Date, nullable=False)
-    date_to: Mapped[date] = mapped_column(Date, nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-
-
 class AcademicEvent(Base):
     __tablename__ = "academic_events"
 
@@ -237,7 +228,6 @@ class AcademicEvent(Base):
     time_from: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
     time_to: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
     hall: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    exam_period_id: Mapped[Optional[int]] = mapped_column(ForeignKey("exam_periods.id"), nullable=True)
     academic_year: Mapped[str] = mapped_column(String(32), nullable=False, default="2025/2026")
 
 
@@ -298,7 +288,6 @@ class Booking(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     session_id: Mapped[int] = mapped_column(ForeignKey("consultation_sessions.id"), nullable=False)
     task: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    anonymous_question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     group_size: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[BookingStatus] = mapped_column(
         Enum(BookingStatus, values_callable=lambda x: [i.value for i in x]),

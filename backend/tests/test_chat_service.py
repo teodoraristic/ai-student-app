@@ -38,18 +38,16 @@ class TestStripProfessorFromTopic:
     def test_strip_diacritic_last_name_variant(self):
         assert strip_professor_from_topic_text("graphs — Markovic", "Ana", "Marković") == "graphs"
 
-    async def test_sanitize_state_drops_professor_name_from_topic_fields(self, db, professor):
-        """Persisted conversation state (and bookings) must not keep the booked professor's name in topic text."""
+    async def test_sanitize_state_drops_professor_name_from_task(self, db, professor):
+        """Persisted conversation state must not keep the booked professor's name in task text."""
         state = {
             "professor_id": professor.id,
             "professor": f"{professor.first_name} {professor.last_name}",
             "task": "recursion",
-            "anonymous_question": professor.last_name.lower(),
             "phase": "collect",
         }
         cleaned = await _sanitize_state_dict(db, state)
         assert cleaned["task"] == "recursion"
-        assert cleaned.get("anonymous_question") is None
 
 
 class TestGeneralGroupJoin:

@@ -13,6 +13,9 @@ export type ExamReminder = {
 
 export type ProfessorDashboardData = {
   total_bookings: number
+  upcoming_bookings: number
+  thesis_students: number
+  pending_applications: number
   upcoming_exam_reminders: ExamReminder[]
 }
 

@@ -26,6 +26,10 @@ _LOGIN_FAIL_WINDOW_SEC = 300.0
 _LOGIN_FAIL_MAX = 15
 _login_fail_times: dict[str, list[float]] = {}
 
+_CHANGE_PW_WINDOW_SEC = 300.0
+_CHANGE_PW_MAX = 10
+_change_pw_fail_times: dict[str, list[float]] = {}
+
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
@@ -55,6 +59,19 @@ def _clear_login_failures(request: Request) -> None:
     _login_fail_times.pop(_client_ip(request), None)
 
 
+def _enforce_change_pw_rate_limit(request: Request) -> None:
+    ip = _client_ip(request)
+    now = time()
+    buf = _change_pw_fail_times.setdefault(ip, [])
+    buf[:] = [t for t in buf if now - t < _CHANGE_PW_WINDOW_SEC]
+    if len(buf) >= _CHANGE_PW_MAX:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password change attempts. Try again later.",
+        )
+    buf.append(now)
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     request: Request,
@@ -81,10 +98,12 @@ async def login(
 
 @router.post("/change-password", response_model=MessageResponse)
 async def change_password(
+    request: Request,
     body: ChangePasswordRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> MessageResponse:
+    _enforce_change_pw_rate_limit(request)
     try:
         await auth_service.change_password(db, user, body.new_password, body.current_password)
         await db.commit()

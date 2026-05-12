@@ -15,7 +15,6 @@ export type DashboardBooking = {
   course_name: string | null
   hall: string | null
   task: string | null
-  anonymous_question: string | null
 }
 
 export function useStudentDashboardData() {

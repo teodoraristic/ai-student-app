@@ -856,16 +856,49 @@ async def prof_dashboard(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_role(UserRole.professor)),
 ):
+    from datetime import timedelta
+    today = utc_today()
+
     total = await db.scalar(
         select(func.count())
         .select_from(Booking)
         .join(ConsultationSession, ConsultationSession.id == Booking.session_id)
-        .where(ConsultationSession.professor_id == user.id)
+        .where(
+            ConsultationSession.professor_id == user.id,
+            Booking.status != BookingStatus.cancelled,
+        )
+    )
+
+    upcoming_bookings = await db.scalar(
+        select(func.count())
+        .select_from(Booking)
+        .join(ConsultationSession, ConsultationSession.id == Booking.session_id)
+        .where(
+            ConsultationSession.professor_id == user.id,
+            Booking.status == BookingStatus.active,
+            ConsultationSession.session_date >= today,
+        )
+    )
+
+    thesis_students = await db.scalar(
+        select(func.count())
+        .select_from(ThesisApplication)
+        .where(
+            ThesisApplication.professor_id == user.id,
+            ThesisApplication.status == ThesisApplicationStatus.active,
+        )
+    )
+
+    pending_applications = await db.scalar(
+        select(func.count())
+        .select_from(ThesisApplication)
+        .where(
+            ThesisApplication.professor_id == user.id,
+            ThesisApplication.status == ThesisApplicationStatus.pending,
+        )
     )
 
     days_ahead = await config_service.get_config_int(db, "days_before_exam_trigger", 7)
-    from datetime import timedelta
-    today = utc_today()
     cutoff = today + timedelta(days=days_ahead)
     upcoming_events = (
         await db.scalars(
@@ -903,6 +936,9 @@ async def prof_dashboard(
 
     return {
         "total_bookings": int(total or 0),
+        "upcoming_bookings": int(upcoming_bookings or 0),
+        "thesis_students": int(thesis_students or 0),
+        "pending_applications": int(pending_applications or 0),
         "upcoming_exam_reminders": reminders,
     }
 

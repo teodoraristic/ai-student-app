@@ -48,7 +48,7 @@ const TYPE_STYLE: Record<string, { bg: string; color: string }> = {
 }
 
 export default function Windows() {
-  const { rows, loading, error, reload, addWindow } = useProfessorWindows()
+  const { rows, loading, error, addWindow } = useProfessorWindows()
   const [formOpen, setFormOpen] = useState(false)
   const [day, setDay] = useState('monday')
   const [timeFrom, setTimeFrom] = useState('09:00')
@@ -72,21 +72,16 @@ export default function Windows() {
           <h1 style={U.title}>Consultation hours</h1>
           <p style={U.subtitle}>Recurring weekly slots students see when booking.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => {
-              setFormOpen((o) => !o)
-              setFormErr(null)
-            }}
-            style={U.btnPrimary}
-          >
-            {formOpen ? 'Close form' : 'Add window'}
-          </button>
-          <button type="button" onClick={() => void reload()} disabled={loading} style={{ ...U.btnSecondary, opacity: loading ? 0.7 : 1, cursor: loading ? 'wait' : 'pointer' }}>
-            Refresh
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setFormOpen((o) => !o)
+            setFormErr(null)
+          }}
+          style={U.btnPrimary}
+        >
+          {formOpen ? 'Close form' : 'Add window'}
+        </button>
       </div>
 
       {loading && <p style={{ fontSize: '0.85rem', color: '#aab8cc', marginBottom: '1rem' }}>Loading…</p>}
